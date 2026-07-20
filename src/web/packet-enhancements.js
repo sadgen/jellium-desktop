@@ -180,27 +180,19 @@
             const apiUrl = `${auth.serverUrl}/Users/${auth.userId}/Items?Ids=${idsString}&Fields=UserData`;
             
             try {
-                console.log(`[Jellium Debug] Querying playcounts for ${chunk.length} items`);
                 const response = await fetch(apiUrl, {
                     headers: { 
                         'Authorization': `MediaBrowser Client="JelliumDesktop", Device="Web", DeviceId="JelliumScript", Version="1.0.0", Token="${auth.accessToken}"`, 
                         'Accept': 'application/json' 
                     }
                 });
-                if (!response.ok) {
-                    console.log(`[Jellium Debug] Response failed: ${response.status}`);
-                    continue;
-                }
+                if (!response.ok) continue;
                 const data = await response.json();
-                console.log(`[Jellium Debug] API returned ${data.Items ? data.Items.length : 0} items`);
                 if (data && data.Items) {
                     DOMBatch.add(() => {
                         data.Items.forEach(item => {
-                            const hasPlayCount = item.UserData && typeof item.UserData.PlayCount === 'number';
-                            console.log(`[Jellium Debug] Item: "${item.Name}" (${item.Type}), PlayCount: ${hasPlayCount ? item.UserData.PlayCount : 'undefined/none'}`);
                             if (item.UserData && item.UserData.PlayCount > 0) {
                                 const cards = document.querySelectorAll(`.card[data-id="${item.Id}"], .listItem[data-id="${item.Id}"]`);
-                                console.log(`[Jellium Debug]   Found ${cards.length} matching cards in DOM for ID ${item.Id}`);
                                 cards.forEach(card => {
                                     addBadgeToCard(card, item.UserData.PlayCount);
                                 });
@@ -209,7 +201,7 @@
                     });
                 }
             } catch (error) {
-                console.error('[Jellium Debug] Batch playcount fetch failed:', error);
+                console.error('[Jellium] Batch playcount fetch failed:', error);
             }
         }
     }
@@ -217,14 +209,12 @@
     function addBadgeToCard(card, count) {
         if (card.querySelector('.play-count-badge')) return;
         const container = card.querySelector('.cardScalable') || card.querySelector('.cardBox') || card;
-        console.log(`[Jellium Debug] Container found: ${!!container} for card. Selector checks: .cardScalable=${!!card.querySelector('.cardScalable')}, .cardBox=${!!card.querySelector('.cardBox')}`);
         if (!container) return;
         const badge = document.createElement('div');
         badge.className = 'play-count-badge';
         badge.innerHTML = `<svg style="width:10px;height:10px;fill:currentColor;" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg><span>${count}</span>`;
         if (window.getComputedStyle(container).position === 'static') container.style.position = 'relative';
         container.appendChild(badge);
-        console.log(`[Jellium Debug]   Appended badge (${count}) to container successfully`);
     }
 
     async function buildDuplicateDatabase() {
