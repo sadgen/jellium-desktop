@@ -184,6 +184,7 @@ pub(crate) enum InjectedScript {
     ContextMenu,
     SelectMenu,
     PacketEnhancements,
+    AutoplayPreview,
 }
 
 impl InjectedScript {
@@ -199,6 +200,7 @@ impl InjectedScript {
             "context-menu.js" => Self::ContextMenu,
             "select-menu.js" => Self::SelectMenu,
             "packet-enhancements.js" => Self::PacketEnhancements,
+            "autoplay-preview.js" => Self::AutoplayPreview,
             _ => return None,
         })
     }
@@ -215,6 +217,7 @@ impl InjectedScript {
             Self::ContextMenu => "context-menu.js",
             Self::SelectMenu => "select-menu.js",
             Self::PacketEnhancements => "packet-enhancements.js",
+            Self::AutoplayPreview => "autoplay-preview.js",
         }
     }
 
@@ -273,6 +276,7 @@ const WEB_SCRIPTS: &[InjectedScript] = &[
     InjectedScript::InputPlugin,
     InjectedScript::ClientSettings,
     InjectedScript::PacketEnhancements,
+    InjectedScript::AutoplayPreview,
 ];
 const OVERLAY_FUNCTIONS: &[NativeFunction] = &[
     NativeFunction::GetSavedServerUrl,
