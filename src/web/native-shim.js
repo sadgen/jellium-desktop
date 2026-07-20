@@ -513,9 +513,14 @@
         let fov = 90;
 
         function updateMpvVr() {
-            if (!window.jmpNative || !window.jmpNative.playerSetVf) return;
+            console.log('[Jellium VR] updateMpvVr called, vrActive:', vrActive, 'vrMode:', vrMode, 'yaw:', yaw, 'pitch:', pitch, 'fov:', fov);
+            if (!window.jmpNative || !window.jmpNative.playerSetVf) {
+                console.warn('[Jellium VR] window.jmpNative.playerSetVf is not available');
+                return;
+            }
             
             if (!vrActive) {
+                console.log('[Jellium VR] Deactivating VR (clearing filter)');
                 window.jmpNative.playerSetVf('');
                 return;
             }
@@ -535,6 +540,7 @@
                 filter = '';
             }
             
+            console.log('[Jellium VR] Setting vf filter to mpv:', filter);
             window.jmpNative.playerSetVf(filter);
         }
 
@@ -547,6 +553,7 @@
         function setupVrEvents(container) {
             if (container.dataset.vrEventsSetup) return;
             container.dataset.vrEventsSetup = 'true';
+            console.log('[Jellium VR] Setting up VR drag and wheel events on container');
 
             container.addEventListener('mousedown', (e) => {
                 if (!vrActive) return;
@@ -595,6 +602,7 @@
             const playerContainer = document.querySelector('.videoPlayerContainer') || document.querySelector('.htmlvideoplayerContainer');
             if (!playerContainer) return;
 
+            console.log('[Jellium VR] Injecting VR controls into document.body');
             const wrapper = document.createElement('div');
             wrapper.id = 'vr-controls-wrapper';
             wrapper.style.cssText = 'position:fixed;top:80px;right:20px;z-index:999999;display:flex;flex-direction:column;gap:8px;align-items:flex-end;pointer-events:auto;';
@@ -606,6 +614,7 @@
             btn.onclick = (e) => {
                 e.stopPropagation();
                 vrActive = !vrActive;
+                console.log('[Jellium VR] Toggle VR button clicked. vrActive is now:', vrActive);
                 if (vrActive) {
                     btn.innerHTML = '❌ 退出 VR';
                     btn.style.backgroundColor = '#d63031';
@@ -643,19 +652,20 @@
 
             select.onchange = (e) => {
                 vrMode = e.target.value;
+                console.log('[Jellium VR] VR mode selected:', vrMode);
                 updateMpvVr();
             };
             select.onclick = (e) => e.stopPropagation();
 
             wrapper.appendChild(btn);
             wrapper.appendChild(select);
-            playerContainer.appendChild(wrapper);
+            document.body.appendChild(wrapper);
 
             setupVrEvents(playerContainer);
         }
 
         setInterval(() => {
-            const playerContainer = document.querySelector('.videoPlayerContainer');
+            const playerContainer = document.querySelector('.videoPlayerContainer') || document.querySelector('.htmlvideoplayerContainer');
             if (playerContainer) {
                 injectVrControls();
             } else {
@@ -664,7 +674,10 @@
                     updateMpvVr();
                 }
                 const wrapper = document.getElementById('vr-controls-wrapper');
-                if (wrapper) wrapper.remove();
+                if (wrapper) {
+                    console.log('[Jellium VR] Player container gone, removing VR controls');
+                    wrapper.remove();
+                }
             }
         }, 1000);
 
