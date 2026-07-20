@@ -101,7 +101,6 @@
 
     const styleElement = document.createElement('style');
     styleElement.textContent = STYLES;
-    document.head.append(styleElement);
 
     function getAuthInfo() {
         try {
@@ -478,9 +477,17 @@
         }
     });
 
-    observer.observe(document.body, { childList: true, subtree: true });
-    
     const initWhenIdle = () => {
+        if (window.jfPacketEnhancementsInitialized) return;
+        window.jfPacketEnhancementsInitialized = true;
+
+        // Safely append style
+        (document.head || document.documentElement).append(styleElement);
+
+        // Safely start observer on body or documentElement
+        const targetNode = document.body || document.documentElement;
+        observer.observe(targetNode, { childList: true, subtree: true });
+
         scheduleProcessing();
         if ('requestIdleCallback' in window) {
             window.requestIdleCallback(() => {
