@@ -180,6 +180,7 @@ pub(crate) enum InjectedScript {
     Csd,
     ContextMenu,
     SelectMenu,
+    PacketEnhancements,
 }
 
 impl InjectedScript {
@@ -194,6 +195,7 @@ impl InjectedScript {
             "csd.js" => Self::Csd,
             "context-menu.js" => Self::ContextMenu,
             "select-menu.js" => Self::SelectMenu,
+            "packet-enhancements.js" => Self::PacketEnhancements,
             _ => return None,
         })
     }
@@ -209,6 +211,7 @@ impl InjectedScript {
             Self::Csd => "csd.js",
             Self::ContextMenu => "context-menu.js",
             Self::SelectMenu => "select-menu.js",
+            Self::PacketEnhancements => "packet-enhancements.js",
         }
     }
 
@@ -265,6 +268,7 @@ const WEB_SCRIPTS: &[InjectedScript] = &[
     InjectedScript::MpvAudioPlayer,
     InjectedScript::InputPlugin,
     InjectedScript::ClientSettings,
+    InjectedScript::PacketEnhancements,
 ];
 const OVERLAY_FUNCTIONS: &[NativeFunction] = &[
     NativeFunction::GetSavedServerUrl,
