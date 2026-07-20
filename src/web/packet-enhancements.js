@@ -9,11 +9,11 @@
     const STYLES = `
         /* --- 播放次数角标 --- */
         .play-count-badge {
-            position: absolute; bottom: 6px; left: 6px;
+            position: absolute; top: 6px; left: 6px;
             background-color: rgba(0, 0, 0, 0.75); color: #eee;
             font-size: 0.75rem; font-weight: 500;
             padding: 2px 6px; border-radius: 4px;
-            z-index: 5; pointer-events: none;
+            z-index: 9; pointer-events: none;
             backdrop-filter: blur(2px);
             display: flex; align-items: center; gap: 3px;
             box-shadow: 0 1px 2px rgba(0,0,0,0.5);
@@ -101,7 +101,6 @@
 
     const styleElement = document.createElement('style');
     styleElement.textContent = STYLES;
-    document.head.append(styleElement);
 
     function getAuthInfo() {
         try {
@@ -170,73 +169,41 @@
         }, 3000);
     }
 
-    const ioCallback = (entries, observer) => {
-        entries.forEach(entry => {
-            if (entry.isIntersecting) {
-                const card = entry.target;
-                const id = card.getAttribute('data-id');
-                observer.unobserve(card);
-                if (id && !processedIds.has(id)) fetchAndRenderPlayCount(card, id);
-                if (isDbLoaded && id) applyHighlightToCard(card, id);
-            }
-        });
-    };
-    const io = new IntersectionObserver(ioCallback, { root: null, rootMargin: '100px', threshold: 0.1 });
+    async function batchFetchPlayCounts(itemIds) {
+        const auth = getAuthInfo();
+        if (!auth) return;
 
-    const playCountBatch = {
-        pendingIds: new Set(),
-        processing: false,
-        add(itemId) {
-            this.pendingIds.add(itemId);
-            if (!this.processing) {
-                this.processing = true;
-                setTimeout(() => this.process(), 100);
-            }
-        },
-        async process() {
-            if (this.pendingIds.size === 0) {
-                this.processing = false;
-                return;
-            }
-            const idsToProcess = Array.from(this.pendingIds);
-            this.pendingIds.clear();
-            
-            const batchSize = 5;
-            for (let i = 0; i < idsToProcess.length; i += batchSize) {
-                const batch = idsToProcess.slice(i, i + batchSize);
-                await Promise.all(batch.map(id => this.fetchPlayCount(id)));
-            }
-            
-            if (this.pendingIds.size > 0) {
-                setTimeout(() => this.process(), 50);
-            } else {
-                this.processing = false;
-            }
-        },
-        async fetchPlayCount(itemId) {
-            const auth = getAuthInfo();
-            if (!auth || processedIds.has(itemId)) return;
-            processedIds.add(itemId);
+        const chunkSize = 30;
+        for (let i = 0; i < itemIds.length; i += chunkSize) {
+            const chunk = itemIds.slice(i, i + chunkSize);
+            const idsString = chunk.join(',');
+            const apiUrl = `${auth.serverUrl}/Users/${auth.userId}/Items?Ids=${idsString}&Fields=UserData`;
             
             try {
-                const apiUrl = `${auth.serverUrl}/Users/${auth.userId}/Items/${itemId}`;
                 const response = await fetch(apiUrl, {
-                    headers: { 'Authorization': `MediaBrowser Client="JelliumDesktop", Device="Web", DeviceId="JelliumScript", Version="1.0.0", Token="${auth.accessToken}"`, 'Accept': 'application/json' }
+                    headers: { 
+                        'Authorization': `MediaBrowser Client="JelliumDesktop", Device="Web", DeviceId="JelliumScript", Version="1.0.0", Token="${auth.accessToken}"`, 
+                        'Accept': 'application/json' 
+                    }
                 });
-                if (!response.ok) return;
+                if (!response.ok) continue;
                 const data = await response.json();
-                if (data.UserData && data.UserData.PlayCount > 0) {
+                if (data && data.Items) {
                     DOMBatch.add(() => {
-                        const card = document.querySelector(`.card[data-id="${itemId}"], .listItem[data-id="${itemId}"]`);
-                        if (card) addBadgeToCard(card, data.UserData.PlayCount);
+                        data.Items.forEach(item => {
+                            if (item.UserData && item.UserData.PlayCount > 0) {
+                                const cards = document.querySelectorAll(`.card[data-id="${item.Id}"], .listItem[data-id="${item.Id}"]`);
+                                cards.forEach(card => {
+                                    addBadgeToCard(card, item.UserData.PlayCount);
+                                });
+                            }
+                        });
                     });
                 }
-            } catch (error) { console.error(error); }
+            } catch (error) {
+                console.error('[Jellium] Batch playcount fetch failed:', error);
+            }
         }
-    };
-    
-    function fetchAndRenderPlayCount(cardElement, itemId) {
-        playCountBatch.add(itemId);
     }
 
     function addBadgeToCard(card, count) {
@@ -435,16 +402,23 @@
 
     const debouncedScheduleProcessing = debounce(() => {
         const cards = document.querySelectorAll('.card[data-id], .listItem[data-id]');
+        const idsToFetch = [];
         cards.forEach(card => {
-            if (!observedElements.has(card)) {
-                io.observe(card);
-                observedElements.add(card);
+            const id = card.getAttribute('data-id');
+            if (id) {
+                if (!processedIds.has(id)) {
+                    idsToFetch.push(id);
+                    processedIds.add(id);
+                }
                 if (isDbLoaded) {
-                    const id = card.getAttribute('data-id');
                     applyHighlightToCard(card, id);
                 }
             }
         });
+
+        if (idsToFetch.length > 0) {
+            batchFetchPlayCounts(idsToFetch);
+        }
         injectFilterButton();
     }, 200);
     
@@ -478,9 +452,17 @@
         }
     });
 
-    observer.observe(document.body, { childList: true, subtree: true });
-    
     const initWhenIdle = () => {
+        if (window.jfPacketEnhancementsInitialized) return;
+        window.jfPacketEnhancementsInitialized = true;
+
+        // Safely append style
+        (document.head || document.documentElement).append(styleElement);
+
+        // Safely start observer on body or documentElement
+        const targetNode = document.body || document.documentElement;
+        observer.observe(targetNode, { childList: true, subtree: true });
+
         scheduleProcessing();
         if ('requestIdleCallback' in window) {
             window.requestIdleCallback(() => {
