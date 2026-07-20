@@ -503,6 +503,172 @@
                 }
             }).observe(document.head, { childList: true });
         }
+        // =====================================================================
+        // VR Player Integration
+        // =====================================================================
+        let vrActive = false;
+        let vrMode = '360_2d';
+        let yaw = 0;
+        let pitch = 0;
+        let fov = 90;
+
+        function updateMpvVr() {
+            if (!window.jmpNative || !window.jmpNative.playerSetVf) return;
+            
+            if (!vrActive) {
+                window.jmpNative.playerSetVf('');
+                return;
+            }
+            
+            let filter = '';
+            if (vrMode === '360_2d') {
+                filter = 'lavfi=[v360=input=e:output=p:yaw=' + yaw + ':pitch=' + pitch + ':fov=' + fov + ']';
+            } else if (vrMode === '360_3d_lr') {
+                filter = 'lavfi=[stereo3d=sbsl:ml,v360=input=e:output=p:yaw=' + yaw + ':pitch=' + pitch + ':fov=' + fov + ']';
+            } else if (vrMode === '360_3d_tb') {
+                filter = 'lavfi=[stereo3d=sbl:ml,v360=input=e:output=p:yaw=' + yaw + ':pitch=' + pitch + ':fov=' + fov + ']';
+            } else if (vrMode === '180_2d') {
+                filter = 'lavfi=[v360=input=he:output=p:yaw=' + yaw + ':pitch=' + pitch + ':fov=' + fov + ']';
+            } else if (vrMode === '180_3d_lr') {
+                filter = 'lavfi=[stereo3d=sbsl:ml,v360=input=he:output=p:yaw=' + yaw + ':pitch=' + pitch + ':fov=' + fov + ']';
+            } else {
+                filter = '';
+            }
+            
+            window.jmpNative.playerSetVf(filter);
+        }
+
+        let isDragging = false;
+        let startX = 0;
+        let startY = 0;
+        let startYaw = 0;
+        let startPitch = 0;
+
+        function setupVrEvents(container) {
+            if (container.dataset.vrEventsSetup) return;
+            container.dataset.vrEventsSetup = 'true';
+
+            container.addEventListener('mousedown', (e) => {
+                if (!vrActive) return;
+                if (e.button !== 0 || e.target.closest('button') || e.target.closest('a') || e.target.closest('input') || e.target.closest('select') || e.target.closest('#vr-controls-wrapper')) return;
+                
+                isDragging = true;
+                startX = e.clientX;
+                startY = e.clientY;
+                startYaw = yaw;
+                startPitch = pitch;
+                
+                e.preventDefault();
+            });
+
+            document.addEventListener('mousemove', (e) => {
+                if (!isDragging || !vrActive) return;
+                const dx = e.clientX - startX;
+                const dy = e.clientY - startY;
+                
+                const sensitivity = 0.15;
+                yaw = (startYaw - dx * sensitivity) % 360;
+                if (yaw > 180) yaw -= 360;
+                if (yaw < -180) yaw += 360;
+                
+                pitch = Math.max(-85, Math.min(85, startPitch + dy * sensitivity));
+                
+                updateMpvVr();
+            });
+
+            document.addEventListener('mouseup', () => {
+                isDragging = false;
+            });
+
+            container.addEventListener('wheel', (e) => {
+                if (!vrActive) return;
+                e.preventDefault();
+                
+                const zoomSpeed = 0.05;
+                fov = Math.max(15, Math.min(140, fov + e.deltaY * zoomSpeed));
+                updateMpvVr();
+            }, { passive: false });
+        }
+
+        function injectVrControls() {
+            if (document.getElementById('vr-controls-wrapper')) return;
+            const playerContainer = document.querySelector('.videoPlayerContainer') || document.querySelector('.htmlvideoplayerContainer');
+            if (!playerContainer) return;
+
+            const wrapper = document.createElement('div');
+            wrapper.id = 'vr-controls-wrapper';
+            wrapper.style.cssText = 'position:fixed;top:80px;right:20px;z-index:999999;display:flex;flex-direction:column;gap:8px;align-items:flex-end;pointer-events:auto;';
+
+            const btn = document.createElement('button');
+            btn.id = 'toggle-vr-btn';
+            btn.innerHTML = '🥽 开启 VR';
+            btn.style.cssText = 'padding:8px 16px;background-color:rgba(0,0,0,0.7);border:1px solid rgba(255,255,255,0.3);color:white;border-radius:6px;cursor:pointer;font-size:14px;backdrop-filter:blur(4px);transition:all 0.2s;min-width:120px;font-family:inherit;box-shadow:0 4px 6px rgba(0,0,0,0.3);';
+            btn.onclick = (e) => {
+                e.stopPropagation();
+                vrActive = !vrActive;
+                if (vrActive) {
+                    btn.innerHTML = '❌ 退出 VR';
+                    btn.style.backgroundColor = '#d63031';
+                    btn.style.borderColor = '#d63031';
+                    select.style.display = 'block';
+                } else {
+                    btn.innerHTML = '🥽 开启 VR';
+                    btn.style.backgroundColor = 'rgba(0, 0, 0, 0.7)';
+                    btn.style.borderColor = 'rgba(255, 255, 255, 0.3)';
+                    select.style.display = 'none';
+                }
+                updateMpvVr();
+            };
+
+            const select = document.createElement('select');
+            select.id = 'vr-mode-select';
+            select.style.cssText = 'padding:6px;background-color:rgba(0,0,0,0.7);border:1px solid rgba(255,255,255,0.3);color:#eee;border-radius:6px;font-size:12px;min-width:120px;outline:none;backdrop-filter:blur(4px);cursor:pointer;display:none;font-family:inherit;box-shadow:0 4px 6px rgba(0,0,0,0.3);';
+            
+            const modes = [
+                { val: '360_2d', text: '360° 全景 (2D)' },
+                { val: '360_3d_lr', text: '360° 3D (左右)' },
+                { val: '360_3d_tb', text: '360° 3D (上下)' },
+                { val: '180_2d', text: '180° 半球 (2D)' },
+                { val: '180_3d_lr', text: '180° 3D (左右)' },
+                { val: 'plane_2d', text: '📺 退出滤镜' }
+            ];
+
+            modes.forEach(m => {
+                const opt = document.createElement('option');
+                opt.value = m.val;
+                opt.innerText = m.text;
+                if(m.val === vrMode) opt.selected = true;
+                select.appendChild(opt);
+            });
+
+            select.onchange = (e) => {
+                vrMode = e.target.value;
+                updateMpvVr();
+            };
+            select.onclick = (e) => e.stopPropagation();
+
+            wrapper.appendChild(btn);
+            wrapper.appendChild(select);
+            playerContainer.appendChild(wrapper);
+
+            setupVrEvents(playerContainer);
+        }
+
+        setInterval(() => {
+            const playerContainer = document.querySelector('.videoPlayerContainer');
+            if (playerContainer) {
+                injectVrControls();
+            } else {
+                if (vrActive) {
+                    vrActive = false;
+                    updateMpvVr();
+                }
+                const wrapper = document.getElementById('vr-controls-wrapper');
+                if (wrapper) wrapper.remove();
+            }
+        }, 1000);
+
+        console.debug('[Media] Native shim installed');
     });
 
     console.debug('[Media] Native shim installed');
