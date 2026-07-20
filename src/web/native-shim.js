@@ -527,15 +527,15 @@
             
             let filter = '';
             if (vrMode === '360_2d') {
-                filter = 'lavfi=[v360=input=e:output=p:yaw=' + yaw + ':pitch=' + pitch + ':fov=' + fov + ']';
+                filter = 'lavfi=[v360=input=e:output=flat:yaw=' + yaw + ':pitch=' + pitch + ':h_fov=' + fov + ':w=iw:h=ih]';
             } else if (vrMode === '360_3d_lr') {
-                filter = 'lavfi=[stereo3d=sbsl:ml,v360=input=e:output=p:yaw=' + yaw + ':pitch=' + pitch + ':fov=' + fov + ']';
+                filter = 'lavfi=[stereo3d=sbsl:ml,v360=input=e:output=flat:yaw=' + yaw + ':pitch=' + pitch + ':h_fov=' + fov + ':w=iw*2:h=ih]';
             } else if (vrMode === '360_3d_tb') {
-                filter = 'lavfi=[stereo3d=sbl:ml,v360=input=e:output=p:yaw=' + yaw + ':pitch=' + pitch + ':fov=' + fov + ']';
+                filter = 'lavfi=[stereo3d=sbl:ml,v360=input=e:output=flat:yaw=' + yaw + ':pitch=' + pitch + ':h_fov=' + fov + ':w=iw:h=ih*2]';
             } else if (vrMode === '180_2d') {
-                filter = 'lavfi=[v360=input=he:output=p:yaw=' + yaw + ':pitch=' + pitch + ':fov=' + fov + ']';
+                filter = 'lavfi=[v360=input=he:output=flat:yaw=' + yaw + ':pitch=' + pitch + ':h_fov=' + fov + ':w=iw:h=ih]';
             } else if (vrMode === '180_3d_lr') {
-                filter = 'lavfi=[stereo3d=sbsl:ml,v360=input=he:output=p:yaw=' + yaw + ':pitch=' + pitch + ':fov=' + fov + ']';
+                filter = 'lavfi=[stereo3d=sbsl:ml,v360=input=he:output=flat:yaw=' + yaw + ':pitch=' + pitch + ':h_fov=' + fov + ':w=iw*2:h=ih]';
             } else {
                 filter = '';
             }
