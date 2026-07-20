@@ -26,7 +26,7 @@ use jfn_mpv::api::{
     jfn_mpv_audio_add, jfn_mpv_load_file, jfn_mpv_pause, jfn_mpv_play, jfn_mpv_seek_absolute,
     jfn_mpv_set_aspect_mode, jfn_mpv_set_audio_delay, jfn_mpv_set_audio_track, jfn_mpv_set_muted,
     jfn_mpv_set_speed, jfn_mpv_set_subtitle_delay, jfn_mpv_set_subtitle_track, jfn_mpv_set_volume,
-    jfn_mpv_stop, jfn_mpv_sub_add,
+    jfn_mpv_stop, jfn_mpv_sub_add, jfn_mpv_set_vf,
 };
 use jfn_mpv::boot::jfn_mpv_handle_get;
 use jfn_playback::ingest_driver::jfn_playback_fullscreen;
@@ -307,6 +307,10 @@ fn handle_message(message: BrowserMessage) -> bool {
         }),
         "playerSetSpeed" => with_args(args, |a| {
             jfn_mpv_set_speed(list_int(a, 0) as f64 / 1000.0);
+        }),
+        "playerSetVf" => with_args(args, |a| {
+            let vf = list_string(a, 0);
+            jfn_mpv_set_vf(&vf);
         }),
         "playerSetSubtitle" => with_args(args, |a| {
             let id = list_int(a, 0) as i64;

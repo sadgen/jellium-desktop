@@ -321,6 +321,13 @@ pub fn jfn_mpv_set_start_position(s: f64) {
     unsafe { set_double(c"start", s) };
 }
 
+pub fn jfn_mpv_set_vf(vf: &str) {
+    if let Ok(s) = std::ffi::CString::new(vf) {
+        unsafe { set_str(c"vf", &s) };
+    }
+}
+
+
 /// Track id sentinel: 0 = disabled. >=1 = explicit mpv track id.
 /// Mpv's auto-track-selection is globally disabled (boot applies
 /// `track-auto-selection=no`); jellyfin-web is the authority.
