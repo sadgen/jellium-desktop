@@ -512,82 +512,200 @@
         let pitch = 0;
         let fov = 90;
 
+        let mouseMoveHandler = null;
+        let wheelHandler = null;
+        let mouseDownHandler = null;
+        let mouseUpHandler = null;
+        let clickHandler = null;
+        let zoomInterval = null;
+
         function updateMpvVr() {
-            if (!window.jmpNative || !window.jmpNative.playerSetVf) return;
+            console.log('[Jellium VR] updateMpvVr called, vrActive:', vrActive, 'vrMode:', vrMode, 'yaw:', yaw, 'pitch:', pitch, 'fov:', fov);
+            if (!window.jmpNative || !window.jmpNative.playerSetVf) {
+                console.warn('[Jellium VR] window.jmpNative.playerSetVf is not available');
+                return;
+            }
             
             if (!vrActive) {
+                console.log('[Jellium VR] Deactivating VR (clearing filter)');
                 window.jmpNative.playerSetVf('');
                 return;
             }
             
             let filter = '';
             if (vrMode === '360_2d') {
-                filter = 'lavfi=[v360=input=e:output=p:yaw=' + yaw + ':pitch=' + pitch + ':fov=' + fov + ']';
+                filter = 'lavfi=[v360=input=e:output=flat:yaw=' + yaw + ':pitch=' + pitch + ':h_fov=' + fov + ':w=1920:h=1080]';
             } else if (vrMode === '360_3d_lr') {
-                filter = 'lavfi=[stereo3d=sbsl:ml,v360=input=e:output=p:yaw=' + yaw + ':pitch=' + pitch + ':fov=' + fov + ']';
+                filter = 'lavfi=[stereo3d=sbsl:ml,v360=input=e:output=flat:yaw=' + yaw + ':pitch=' + pitch + ':h_fov=' + fov + ':w=1920:h=1080]';
             } else if (vrMode === '360_3d_tb') {
-                filter = 'lavfi=[stereo3d=sbl:ml,v360=input=e:output=p:yaw=' + yaw + ':pitch=' + pitch + ':fov=' + fov + ']';
+                filter = 'lavfi=[stereo3d=sbl:ml,v360=input=e:output=flat:yaw=' + yaw + ':pitch=' + pitch + ':h_fov=' + fov + ':w=1920:h=1080]';
             } else if (vrMode === '180_2d') {
-                filter = 'lavfi=[v360=input=he:output=p:yaw=' + yaw + ':pitch=' + pitch + ':fov=' + fov + ']';
+                filter = 'lavfi=[v360=input=he:output=flat:yaw=' + yaw + ':pitch=' + pitch + ':h_fov=' + fov + ':w=1920:h=1080]';
             } else if (vrMode === '180_3d_lr') {
-                filter = 'lavfi=[stereo3d=sbsl:ml,v360=input=he:output=p:yaw=' + yaw + ':pitch=' + pitch + ':fov=' + fov + ']';
+                filter = 'lavfi=[stereo3d=sbsl:ml,v360=input=he:output=flat:yaw=' + yaw + ':pitch=' + pitch + ':h_fov=' + fov + ':w=1920:h=1080]';
             } else {
                 filter = '';
             }
             
+            console.log('[Jellium VR] Setting vf filter to mpv:', filter);
             window.jmpNative.playerSetVf(filter);
         }
 
-        let isDragging = false;
-        let startX = 0;
-        let startY = 0;
-        let startYaw = 0;
-        let startPitch = 0;
+        function zoomVR(zoomIn) {
+            const step = zoomIn ? -3 : 3;
+            fov = Math.max(10, Math.min(140, fov + step));
+            updateMpvVr();
+        }
 
-        function setupVrEvents(container) {
-            if (container.dataset.vrEventsSetup) return;
-            container.dataset.vrEventsSetup = 'true';
+        function startZooming(zoomIn) {
+            stopZooming();
+            zoomVR(zoomIn);
+            zoomInterval = setInterval(() => {
+                zoomVR(zoomIn);
+            }, 50);
+        }
 
-            container.addEventListener('mousedown', (e) => {
+        function stopZooming() {
+            if (zoomInterval) {
+                clearInterval(zoomInterval);
+                zoomInterval = null;
+            }
+        }
+
+        function removeVrEvents() {
+            stopZooming();
+            if (mouseMoveHandler) {
+                window.removeEventListener('mousemove', mouseMoveHandler, { capture: true });
+                mouseMoveHandler = null;
+            }
+            if (wheelHandler) {
+                window.removeEventListener('wheel', wheelHandler, { capture: true });
+                wheelHandler = null;
+            }
+            if (mouseDownHandler) {
+                window.removeEventListener('mousedown', mouseDownHandler, { capture: true });
+                mouseDownHandler = null;
+            }
+            if (mouseUpHandler) {
+                window.removeEventListener('mouseup', mouseUpHandler, { capture: true });
+                mouseUpHandler = null;
+            }
+            if (clickHandler) {
+                window.removeEventListener('click', clickHandler, { capture: true });
+                clickHandler = null;
+            }
+        }
+
+        function setupVrEvents() {
+            removeVrEvents();
+            console.log('[Jellium VR] Initializing capture-phase mouse and wheel listeners on window');
+
+            mouseMoveHandler = (e) => {
                 if (!vrActive) return;
-                if (e.button !== 0 || e.target.closest('button') || e.target.closest('a') || e.target.closest('input') || e.target.closest('select') || e.target.closest('#vr-controls-wrapper')) return;
-                
-                isDragging = true;
-                startX = e.clientX;
-                startY = e.clientY;
-                startYaw = yaw;
-                startPitch = pitch;
-                
-                e.preventDefault();
-            });
+                if (e.target.closest('#vr-controls-wrapper')) return;
 
-            document.addEventListener('mousemove', (e) => {
-                if (!isDragging || !vrActive) return;
-                const dx = e.clientX - startX;
-                const dy = e.clientY - startY;
-                
-                const sensitivity = 0.15;
-                yaw = (startYaw - dx * sensitivity) % 360;
-                if (yaw > 180) yaw -= 360;
-                if (yaw < -180) yaw += 360;
-                
-                pitch = Math.max(-85, Math.min(85, startPitch + dy * sensitivity));
-                
-                updateMpvVr();
-            });
+                // If buttons are pressed, skip to prevent drag issues
+                if (e.buttons !== 0) {
+                    e.stopPropagation();
+                    e.stopImmediatePropagation();
+                    return;
+                }
 
-            document.addEventListener('mouseup', () => {
-                isDragging = false;
-            });
+                const dx = e.movementX || e.mozMovementX || e.webkitMovementX || 0;
+                const dy = e.movementY || e.mozMovementY || e.webkitMovementY || 0;
 
-            container.addEventListener('wheel', (e) => {
+                if (Math.abs(dx) > 0 || Math.abs(dy) > 0) {
+                    const sensitivity = 0.08;
+                    yaw = (yaw - dx * sensitivity) % 360;
+                    if (yaw > 180) yaw -= 360;
+                    if (yaw < -180) yaw += 360;
+
+                    pitch = Math.max(-85, Math.min(85, pitch + dy * sensitivity));
+
+                    updateMpvVr();
+                }
+            };
+
+            wheelHandler = (e) => {
                 if (!vrActive) return;
+                if (e.target.closest('#vr-controls-wrapper')) return;
+
+                e.stopPropagation();
+                e.stopImmediatePropagation();
                 e.preventDefault();
-                
-                const zoomSpeed = 0.05;
-                fov = Math.max(15, Math.min(140, fov + e.deltaY * zoomSpeed));
-                updateMpvVr();
-            }, { passive: false });
+
+                const video = document.querySelector('video');
+                if (!video) return;
+
+                const step = 10;
+                let newTime = video.currentTime;
+                if (e.deltaY < 0) {
+                    const duration = isFinite(video.duration) ? video.duration : video.currentTime + step;
+                    newTime = Math.min(duration, video.currentTime + step);
+                } else {
+                    newTime = Math.max(0, video.currentTime - step);
+                }
+                video.currentTime = newTime;
+                console.log('[Jellium VR] Intercepted wheel, seek to:', newTime);
+            };
+
+            mouseDownHandler = (e) => {
+                if (!vrActive) return;
+                if (e.target.closest('#vr-controls-wrapper')) return;
+
+                // Prevent standard click-to-pause
+                if (e.button === 0) {
+                    e.stopPropagation();
+                    e.stopImmediatePropagation();
+                    e.preventDefault();
+                    return;
+                }
+
+                if (e.button === 3 || e.button === 4 || e.button === 1) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    e.stopImmediatePropagation();
+
+                    if (e.button === 4) {
+                        startZooming(true); // zoom in
+                    } else if (e.button === 3) {
+                        startZooming(false); // zoom out
+                    } else if (e.button === 1) {
+                        // middle click -> exit VR
+                        const toggleBtn = document.getElementById('toggle-vr-btn');
+                        if (toggleBtn) toggleBtn.click();
+                    }
+                }
+            };
+
+            mouseUpHandler = (e) => {
+                stopZooming();
+                if (!vrActive) return;
+                if (e.target.closest('#vr-controls-wrapper')) return;
+
+                if (e.button === 0 || e.button === 3 || e.button === 4 || e.button === 1) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    e.stopImmediatePropagation();
+                }
+            };
+
+            clickHandler = (e) => {
+                if (!vrActive) return;
+                if (e.target.closest('#vr-controls-wrapper')) return;
+
+                if (e.button === 0 || e.button === 3 || e.button === 4 || e.button === 1) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    e.stopImmediatePropagation();
+                }
+            };
+
+            window.addEventListener('mousemove', mouseMoveHandler, { capture: true });
+            window.addEventListener('wheel', wheelHandler, { capture: true, passive: false });
+            window.addEventListener('mousedown', mouseDownHandler, { capture: true });
+            window.addEventListener('mouseup', mouseUpHandler, { capture: true });
+            window.addEventListener('click', clickHandler, { capture: true });
         }
 
         function injectVrControls() {
@@ -595,6 +713,7 @@
             const playerContainer = document.querySelector('.videoPlayerContainer') || document.querySelector('.htmlvideoplayerContainer');
             if (!playerContainer) return;
 
+            console.log('[Jellium VR] Injecting VR controls into document.body');
             const wrapper = document.createElement('div');
             wrapper.id = 'vr-controls-wrapper';
             wrapper.style.cssText = 'position:fixed;top:80px;right:20px;z-index:999999;display:flex;flex-direction:column;gap:8px;align-items:flex-end;pointer-events:auto;';
@@ -606,6 +725,7 @@
             btn.onclick = (e) => {
                 e.stopPropagation();
                 vrActive = !vrActive;
+                console.log('[Jellium VR] Toggle VR button clicked. vrActive is now:', vrActive);
                 if (vrActive) {
                     btn.innerHTML = '❌ 退出 VR';
                     btn.style.backgroundColor = '#d63031';
@@ -643,19 +763,20 @@
 
             select.onchange = (e) => {
                 vrMode = e.target.value;
+                console.log('[Jellium VR] VR mode selected:', vrMode);
                 updateMpvVr();
             };
             select.onclick = (e) => e.stopPropagation();
 
             wrapper.appendChild(btn);
             wrapper.appendChild(select);
-            playerContainer.appendChild(wrapper);
+            document.body.appendChild(wrapper);
 
-            setupVrEvents(playerContainer);
+            setupVrEvents();
         }
 
         setInterval(() => {
-            const playerContainer = document.querySelector('.videoPlayerContainer');
+            const playerContainer = document.querySelector('.videoPlayerContainer') || document.querySelector('.htmlvideoplayerContainer');
             if (playerContainer) {
                 injectVrControls();
             } else {
@@ -664,7 +785,11 @@
                     updateMpvVr();
                 }
                 const wrapper = document.getElementById('vr-controls-wrapper');
-                if (wrapper) wrapper.remove();
+                if (wrapper) {
+                    console.log('[Jellium VR] Player container gone, removing VR controls');
+                    wrapper.remove();
+                    removeVrEvents();
+                }
             }
         }, 1000);
 
