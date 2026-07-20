@@ -111,7 +111,6 @@
 
     const styleElement = document.createElement('style');
     styleElement.textContent = STYLES;
-    document.head.append(styleElement);
 
     function getAuthInfo() {
         try {
@@ -355,7 +354,7 @@
         }
     }
 
-    document.addEventListener('mouseover', (e) => {
+    const handleMouseOver = (e) => {
         const card = e.target.closest('.card') || e.target.closest('.listItem');
         if (!card) return;
         const itemId = card.getAttribute('data-id');
@@ -368,9 +367,9 @@
         hoverTimer = setTimeout(() => {
             showPreview(card, itemId);
         }, 500); // 500ms hover delay to prevent trigger on swipe-throughs
-    });
+    };
 
-    document.addEventListener('mouseout', (e) => {
+    const handleMouseOut = (e) => {
         const card = e.target.closest('.card') || e.target.closest('.listItem');
         if (!card) return;
         
@@ -381,13 +380,29 @@
         }
         
         removePreview();
-    });
+    };
 
-    // Close preview if mouse enters and leaves the preview container
-    document.addEventListener('mouseleave', (e) => {
+    const handleMouseLeave = (e) => {
         if (e.target && e.target.classList && e.target.classList.contains('jf-hover-preview-container')) {
             removePreview();
         }
-    }, true);
+    };
 
+    function init() {
+        if (window.jfAutoplayPreviewInitialized) return;
+        window.jfAutoplayPreviewInitialized = true;
+
+        // Safely append style
+        (document.head || document.documentElement).append(styleElement);
+
+        document.addEventListener('mouseover', handleMouseOver);
+        document.addEventListener('mouseout', handleMouseOut);
+        document.addEventListener('mouseleave', handleMouseLeave, true);
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', init);
+    } else {
+        init();
+    }
 })();
