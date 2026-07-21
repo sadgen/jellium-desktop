@@ -386,11 +386,7 @@
         }
         /* 确保自动播放层覆盖整个区域 */
         .itemsContainer.jf-large-thumbnail .jf-autoplay-overlay {
-            width: 100% !important;
-            height: 100% !important;
             position: absolute !important;
-            top: 0 !important;
-            left: 0 !important;
             z-index: 10 !important; /* 确保在海报之上 */
         }
         .itemsContainer.jf-large-thumbnail .cardText {
@@ -920,9 +916,10 @@
             itemCache.set(itemId, info);
         }
 
-        const resumeTicks = info?.UserData?.PlaybackPositionTicks || 0;
+                const resumeTicks = info?.UserData?.PlaybackPositionTicks || 0;
         const isFav = info?.UserData?.IsFavorite || false;
         const playCount = info?.UserData?.PlayCount || 0;
+        const posterUrl = auth.url + "/Items/" + itemId + "/Images/Primary?api_key=" + auth.token;
 
         // --- 增加字幕提取逻辑 ---
         const mediaSource = info?.MediaSources?.[0];
@@ -951,7 +948,6 @@
         const pos = getSlotStyle(slotIndex);
         Object.assign(container.style, pos);
 
-        const videoUrl = getVideoStreamUrl(itemId, auth, mediaSourceId);
         container.innerHTML = `
             <div class="jf-preview-header">
                 <span style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:50%;"><span class="jf-title-play-count" style="color:#aaa; font-size:11px; margin-right:8px;" title="播放次数">[播放: ${playCount}]</span>${title}</span>
@@ -967,7 +963,6 @@
                     </select>
                     <div class="jf-btn-vr" style="cursor: pointer; padding: 2px 8px; background: #5533ff; border-radius: 4px; font-size: 11px; font-weight: bold; color: white; margin-right: 4px;" title="开启/关闭 VR 模式">🥽 VR</div>
                     <div class="jf-btn-next-video" style="cursor: pointer; padding: 2px 8px; background: #e67e22; border-radius: 4px; font-size: 11px; font-weight: bold; color: white; margin-right: 4px;" title="播放下一个 Part 或视频">下一部</div>
-                    <div class="jf-btn-mpv" style="cursor: pointer; padding: 2px 8px; background: #00b300; border-radius: 4px; font-size: 11px; font-weight: bold; color: white; margin-right: 4px;" title="使用 MPV Shim 播放">MPV 播放</div>
                     <div class="jf-btn-next" style="cursor: pointer; padding: 2px 8px; background: #00a4dc; border-radius: 4px; font-size: 11px; font-weight: bold; color: white; margin-right: 4px; display: ${(isRandomMode || isTryNewRandomMode || isFavoriteRandomMode) ? 'block' : 'none'};">换一个</div>
                     <div class="jf-btn-reload" title="重新加载此窗口">刷新</div>
                     <div class="jf-btn-favorite" title="加入/取消最爱" style="background: ${isFav ? '#e6b800' : '#444'};" data-isfav="${isFav}">${isFav ? '已最爱' : '最爱'}</div>
@@ -976,8 +971,9 @@
                 </div>
             </div>
             <div class="video-wrapper">
-                <video class="jf-video-el" autoplay playsinline muted>
-                    <source src="${videoUrl}" type="video/mp4">
+                <img class="jf-poster-img" src="${posterUrl}" style="width:100%; height:100%; object-fit:contain; border-bottom-left-radius:10px; border-bottom-right-radius:10px;">
+                <video class="jf-video-el" autoplay playsinline muted style="display:none;">
+                    <source src="" type="video/mp4">
                     ${tracksHtml}
                 </video>
                 <div class="jf-trickplay-thumb"></div>
@@ -986,6 +982,7 @@
         `;
 
         document.body.appendChild(container);
+        castToMpv(itemId, startSecond ? Math.floor(startSecond * 10000000) : resumeTicks);
 
         const videoEl = container.querySelector('.jf-video-el');
 
@@ -1399,13 +1396,12 @@
             itemCache.set(partItem.Id, info);
         }
 
-        const mediaSource = info?.MediaSources?.[0];
+                const mediaSource = info?.MediaSources?.[0];
         const mediaSourceId = mediaSource?.Id;
-        const videoUrl = getVideoStreamUrl(partItem.Id, winObj.auth, mediaSourceId);
-        
-        videoEl.innerHTML = `<source src="${videoUrl}" type="video/mp4">`;
-        videoEl.load();
-        videoEl.play().catch(() => {});
+        const posterUrl = winObj.auth.url + "/Items/" + partItem.Id + "/Images/Primary?api_key=" + winObj.auth.token;
+        const posterImg = winObj.el.querySelector('.jf-poster-img');
+        if (posterImg) posterImg.src = posterUrl;
+        castToMpv(partItem.Id, 0);
 
         if (wasVRActive) {
             setTimeout(() => {
@@ -1454,15 +1450,10 @@
         winObj.currentPartIndex = 0;
         winObj.info = info;
 
-        const videoEl = winObj.el.querySelector('.jf-video-el');
-        if (videoEl) {
-            const mediaSource = info?.MediaSources?.[0];
-            const mediaSourceId = mediaSource?.Id;
-            const videoUrl = getVideoStreamUrl(nextItemId, winObj.auth, mediaSourceId);
-            videoEl.innerHTML = `<source src="${videoUrl}" type="video/mp4">`;
-            videoEl.load();
-            videoEl.play().catch(() => {});
-        }
+                const posterUrl = winObj.auth.url + "/Items/" + nextItemId + "/Images/Primary?api_key=" + winObj.auth.token;
+        const posterImg = winObj.el.querySelector('.jf-poster-img');
+        if (posterImg) posterImg.src = posterUrl;
+        castToMpv(nextItemId, 0);
 
         updateHeaderTitleForWin(winObj, nextTitle);
         setupTrickplay(winObj, nextItemId, winObj.auth);
@@ -2482,14 +2473,55 @@
         return url;
     }
 
-    function adjustOverlayAspect(ui) {
+        async function castToMpv(itemId, startTicks = 0) {
+        const auth = getAuth();
+        if (!auth) return;
+
+        try {
+            const res = await fetch(auth.url + "/Sessions?api_key=" + auth.token);
+            if (!res.ok) throw new Error("HTTP " + res.status);
+            const sessions = await res.json();
+
+            let mpvSession = sessions.find(s => s.Client === 'Jellyfin MPV Shim');
+            if (!mpvSession) {
+                mpvSession = sessions.find(s =>
+                    (s.Client && (s.Client.toLowerCase().includes('mpv') || s.Client.toLowerCase().includes('jellium'))) ||
+                    (s.DeviceName && (s.DeviceName.toLowerCase().includes('mpv') || s.DeviceName.toLowerCase().includes('jellium')))
+                );
+            }
+
+            if (!mpvSession) {
+                mpvSession = sessions.find(s =>
+                    s.SupportsMediaControl &&
+                    s.Client !== 'Jellyfin Web' &&
+                    s.Client !== 'Jellyfin Web Client'
+                );
+            }
+
+            if (mpvSession) {
+                console.log("[JF MPV] Automatically casting to: Client=" + mpvSession.Client + " Id=" + mpvSession.Id);
+                const playParams = new URLSearchParams({
+                    api_key: auth.token,
+                    playCommand: 'PlayNow',
+                    itemIds: itemId,
+                    startPositionTicks: startTicks
+                });
+                const playUrl = auth.url + "/Sessions/" + mpvSession.Id + "/Playing?" + playParams.toString();
+                await fetch(playUrl, { method: 'POST' });
+            }
+        } catch (e) {
+            console.error('[JF MPV] Auto-cast failed:', e);
+        }
+    }
+
+    function adjustOverlayAspect(ui, videoRatio = 16 / 9) {
         if (!ui || !ui.container) return;
         const rect = ui.container.getBoundingClientRect();
         const w = rect.width;
         const h = rect.height;
         if (w === 0 || h === 0) return;
 
-        const targetRatio = 16 / 9;
+        const targetRatio = videoRatio;
         const currentRatio = w / h;
 
         let targetW, targetH;
@@ -2692,10 +2724,12 @@
              
         } else {
              ui.realVideo.style.display = 'none';
-             ui.overlay.style.display = 'block';
+              ui.overlay.style.display = 'block';
 
-             // 6. 仅在 Trickplay 模式下跟随鼠标滑动计算进度
-             const rect = ui.container.getBoundingClientRect();
+              // 6. 仅在 Trickplay 模式下跟随鼠标滑动计算进度
+              const videoRatio = (itemInfo.Width && itemInfo.Height) ? (itemInfo.Width / itemInfo.Height) : (16 / 9);
+              adjustOverlayAspect(ui, videoRatio);
+              const rect = ui.container.getBoundingClientRect();
              const percent = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
              
              // 更新进度条
@@ -3177,6 +3211,8 @@
                      ui.overlay.style.display = 'block';
 
                      // 原有依靠图片步进的快照逻辑
+                     const videoRatio = (info.Width && info.Height) ? (info.Width / info.Height) : (16 / 9);
+                     adjustOverlayAspect(ui, videoRatio);
                      const tp = getTrickplayInfo(info);
                      const targetId = tp.id || itemId;
                      const tpInterval = tp.interval || 10;
