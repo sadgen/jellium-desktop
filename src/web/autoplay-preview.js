@@ -1,4 +1,4 @@
-(async function() {
+﻿(async function() {
     'use strict';
 
     if (window.jfAutoplayPreviewActive) return;
@@ -30,10 +30,10 @@
     async function runScript() {
         await loadRequiredLibraries();
 // ==UserScript==
-// @name         Jellyfin 鎮仠澶氱獥棰勮 (MPV鐗?
+// @name         Jellyfin 悬停多窗预览 (MPV版)
 // @namespace    http://tampermonkey.net/
 // @version      4.8
-// @description  鏀寔6绐楀彛 2x3 鐭╅樀鎺掑垪锛岃嚜鍔ㄥ鎵剧┖浣嶇敓鎴愶紝甯︿綅缃蹇嗗拰绮剧伒鍥鹃瑙?
+// @description  支持6窗口 2x3 矩阵排列，自动寻找空位生成，带位置记忆和精灵图预览
 // @author       Gemini
 // @match        https://jellyfin.622276.xyz:8443/*
 // @match        https://jellyfinxxx.622276.xyz:8443/*
@@ -49,7 +49,7 @@
 
     window.jfAutoplayActive = true;
 
-    // 鍏ㄥ眬鍔寔骞跺湪鎹曡幏鏈熼棿鏈夋潯浠跺湴杩囨护/淇濆瓨 mxreality.js 娉ㄥ唽鐨勫叏灞€浜嬩欢鐩戝惉鍣?
+    // 全局劫持并在捕获期间有条件地过滤/保存 mxreality.js 注册的全局事件监听器
     const originalEventTargetAdd = EventTarget.prototype.addEventListener;
 
     EventTarget.prototype.addEventListener = function(type, listener, options) {
@@ -68,17 +68,17 @@
     };
 
     let hoverTimer = null;
-    let previewWindows = []; // 瀛樺偍绐楀彛瀵硅薄鐨勬暟缁?[{el, slotIndex, timestamp}]
-    const currentlyOpeningIds = new Set(); // 姝ｅ湪鎵撳紑鐨勮棰?ID锛岄槻姝㈠紓姝ョ珵鎬佸鑷存墦寮€閲嶅瑙嗛
+    let previewWindows = []; // 存储窗口对象的数组 [{el, slotIndex, timestamp}]
+    const currentlyOpeningIds = new Set(); // 正在打开的视频 ID，防止异步竞态导致打开重复视频
     let topZIndex = 200000;
     const MAX_WINDOWS = 3;
     const COLS = 3;
     const ROWS = 1;
  
-    // 澧炲姞鍏ㄥ眬鏍囧織浣嶇敤浜庢帶鍒舵槸鍚﹀惎鍔ㄥ師鐢诲紩鎿庡強鎾斁鍙傛暟
-    let isRealVideoPreview = false; // 榛樿鍏抽棴
-    let isAutoPlayEnabled = false; // 榛樿鍏抽棴
-    let globalPlaySpeed = 50.0; // 榛樿鍊嶉€?
+    // 增加全局标志位用于控制是否启动原画引擎及播放参数
+    let isRealVideoPreview = false; // 默认关闭
+    let isAutoPlayEnabled = false; // 默认关闭
+    let globalPlaySpeed = 50.0; // 默认倍速
     let globalThumbCols = parseInt(localStorage.getItem('jf-thumb-cols')) || 0;
     const speedOptions = [1.0, 2.0, 3.0, 5.0, 10.0, 20.0, 30.0, 50.0];
 
@@ -165,12 +165,12 @@
     }
 
     function getTrickplayInfo(info) {
-        // 榛樿鍥為€€鍊?
+        // 默认回退值
         const defaultRet = { width: 320, interval: 10, id: null, cols: 10, rows: 10 };
         if (!info) return defaultRet;
         
         const mediaSource = info.MediaSources?.[0];
-        // 灏濊瘯澶氱瀛楁鍛藉悕鍙兘锛歍rickplay, TrickPlay, trickplay
+        // 尝试多种字段命名可能：Trickplay, TrickPlay, trickplay
         const manifests = mediaSource?.Trickplay || mediaSource?.TrickPlay || mediaSource?.trickplay || info.Trickplay || info.TrickPlay;
         const id = mediaSource?.Id || info.Id || null;
         
@@ -179,35 +179,35 @@
         let cols = 10; 
         let rows = 10;
 
-        // 濡傛灉鎵惧埌浜?manifest锛屽皾璇曡В鏋?
+        // 如果找到了 manifest，尝试解析
         if (manifests && typeof manifests === 'object') {
             let config = manifests;
             
-            // 鍏抽敭淇锛氭煇浜涙儏鍐典笅锛宮anifests 琚寘瑁瑰湪 MediaSourceId 涓?
-            // 缁撴瀯濡傦細 { "3cc37...": { "640": {...} } }
-            // 灏濊瘯妫€娴嬫槸鍚︿负杩欑宓屽缁撴瀯
+            // 关键修复：某些情况下，manifests 被包裹在 MediaSourceId 中
+            // 结构如： { "3cc37...": { "640": {...} } }
+            // 尝试检测是否为这种嵌套结构
             const keys = Object.keys(manifests);
             if (keys.length === 1 && manifests[keys[0]] && typeof manifests[keys[0]] === 'object' && !manifests.Width && !manifests[320] && !manifests[640]) {
-                 // 鐪嬭捣鏉ュ儚鏄 ID 鍖呰９浜嗭紝瑙ｅ寘
+                 // 看起来像是被 ID 包裹了，解包
                  config = manifests[keys[0]];
             }
 
-            // 鎵佸钩缁撴瀯澶勭悊
+            // 扁平结构处理
             if (config.Width && !config[config.Width]) {
                  const m = config;
                  width = m.Width;
-                 // 鏅鸿兘绾犳 Interval 鍗曚綅
+                 // 智能纠正 Interval 单位
                  // Jellyfin Ticks = 10,000,000 per sec
                  // Milliseconds = 1,000 per sec
                  let rawInterval = m.Interval || 10000;
-                 // 濡傛灉鍊煎ぇ浜?1,000,000锛屽嚑涔庤偗瀹氭槸 Ticks
+                 // 如果值大于 1,000,000，几乎肯定是 Ticks
                  if (rawInterval > 1000000) interval = rawInterval / 10000000;
-                 // 濡傛灉鍊煎湪 1000 - 100000 涔嬮棿锛屽嚑涔庤偗瀹氭槸姣 (渚嬪 10000ms = 10s)
+                 // 如果值在 1000 - 100000 之间，几乎肯定是毫秒 (例如 10000ms = 10s)
                  else if (rawInterval > 100) interval = rawInterval / 1000;
-                 // 鍚﹀垯鍋囪瀹冨凡缁忔槸绉?
+                 // 否则假设它已经是秒
                  else interval = rawInterval;
 
-                 // 鍚屾淇鍒楁暟閫昏緫
+                 // 同步修正列数逻辑
                  if (m.TileWidth && m.TileWidth <= 20) {
                      cols = m.TileWidth;
                      rows = m.TileHeight || m.TileWidth;
@@ -217,21 +217,21 @@
                  }
                  // console.log(`[JF] Found flat Trickplay manifest ${width}w for item ${id}, Interval: ${interval}s, Grid: ${cols}x${rows}`, m);
             } else {
-                // 鏍囧噯缁撴瀯锛歿"320": {...}, "640": {...}}
+                // 标准结构：{"320": {...}, "640": {...}}
                 const widths = Object.keys(config).map(Number).filter(n => !isNaN(n));
                 if (widths.length > 0) {
-                    // 浼樺厛鎵?640锛屽叾娆℃壘鏈€澶у€硷紝鏈€鍚庝娇鐢?320
+                    // 优先找 640，其次找最大值，最后使用 320
                     width = widths.includes(640) ? 640 : (widths.includes(320) ? 320 : Math.max(...widths));
                     
                     const m = config[width.toString()] || config[width];
                     if (m) {
-                        // 鏅鸿兘绾犳 Interval 鍗曚綅
+                        // 智能纠正 Interval 单位
                         let rawInterval = m.Interval || 10000;
                         if (rawInterval > 1000000) interval = rawInterval / 10000000;
                         else if (rawInterval > 100) interval = rawInterval / 1000;
                         else interval = rawInterval;
                         
-                        // 閫昏緫淇锛歍ileWidth / TileHeight 鍦ㄤ笉鍚岀増鏈殑鎻掍欢涓惈涔変笉鍚?
+                        // 逻辑修正：TileWidth / TileHeight 在不同版本的插件中含义不同
                         if (m.TileWidth && m.TileWidth <= 20) {
                              cols = m.TileWidth;
                              rows = m.TileHeight || m.TileWidth;
@@ -258,7 +258,7 @@
         .jf-preview-instance {
             position: fixed; z-index: 200000; background: #000; border-radius: 10px;
             box-shadow: 0 10px 40px rgba(0,0,0,0.8); border: 1px solid rgba(255,255,255,0.2);
-            /* 鍘婚櫎 overflow: hidden; 浠ヤ究 trickplay 婧㈠嚭鏄剧ず鍦ㄤ笅鏂?*/
+            /* 去除 overflow: hidden; 以便 trickplay 溢出显示在下方 */
             display: flex; flex-direction: column; 
             transition: all 0.4s cubic-bezier(0.165, 0.84, 0.44, 1);
         }
@@ -266,7 +266,7 @@
             background: #1a1a1a; padding: 6px 12px; display: flex;
             justify-content: space-between; align-items: center; color: #fff;
             cursor: move; font-size: 13px; flex-shrink: 0;
-            border-top-left-radius: 10px; border-top-right-radius: 10px; /* 琛ュ伩澶栧眰鐨?overflow:hidden 鍘婚櫎 */
+            border-top-left-radius: 10px; border-top-right-radius: 10px; /* 补偿外层的 overflow:hidden 去除 */
         }
         .jf-btn-close { cursor: pointer; padding: 2px 8px; background: #cc3333; border-radius: 4px; font-size: 11px; font-weight: bold; color: white; }
         .jf-btn-delete { cursor: pointer; padding: 2px 8px; background: #880000; border-radius: 4px; font-size: 11px; font-weight: bold; color: white; margin-right: 4px; }
@@ -275,7 +275,7 @@
         .video-wrapper { position: relative; flex: 1; background: #000; display: flex; align-items: center; justify-content: center; border-bottom-left-radius: 10px; border-bottom-right-radius: 10px; }
         .jf-video-el { width: 100%; height: 100%; object-fit: contain; cursor: move; object-position: top; border-bottom-left-radius: 10px; border-bottom-right-radius: 10px; }
         
-        /* 澧炲姞鑷姩鎾斁寮€鍏虫寜閽牱寮?*/
+        /* 增加自动播放开关按钮样式 */
         .jf-btn-autoplay-toggle {
             display: inline-flex; align-items: center; justify-content: center;
             padding: 0 12px; margin-left: auto; height: 32px; border-radius: 6px;
@@ -286,7 +286,7 @@
         
         .jf-trickplay-thumb {
             position: absolute; 
-            /* 鎸埌瑙嗛鍜岃繘搴︽潯涓嬫柟 */
+            /* 挪到视频和进度条下方 */
             top: calc(100% + 5px); left: 50%; transform: translateX(-50%);
             width: 300px; height: 168px; border: 2px solid #00a4dc; border-radius: 4px;
             background: #111 no-repeat; display: none; pointer-events: none; z-index: 200006;
@@ -297,7 +297,7 @@
         .jf-select-vr-mode { background:#333; color:#fff; border:none; margin-right:4px; border-radius:3px; padding:2px; font-size:12px; outline:none; }
         .jf-vr-container { display: none; position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 5; background: #000; border-bottom-left-radius: 10px; border-bottom-right-radius: 10px; overflow: hidden; }
         .jf-vr-container canvas { display: block; border-bottom-left-radius: 10px; border-bottom-right-radius: 10px; }
-        /* 鍏ㄥ眬棰勮鍥惧眰 - 澧炲ぇ灏哄 */
+        /* 全局预览图层 - 增大尺寸 */
         .jf-global-trickplay {
             position: fixed;
             z-index: 2000000;
@@ -316,14 +316,14 @@
             position: absolute; top: 0; left: 0; width: 100%; height: 100%;
             background-repeat: no-repeat;
             display: none; pointer-events: none; 
-            z-index: 100; /* 纭繚鍦ㄦ渶涓婂眰 */
+            z-index: 100; /* 确保在最上层 */
             border-radius: inherit;
             background-size: contain;
-            filter: brightness(1.15); /* 澧炲姞浜害 */
-            background-color: #000; /* 榛戣壊鑳屾櫙闃叉閫忔槑绌块€?*/
+            filter: brightness(1.15); /* 增加亮度 */
+            background-color: #000; /* 黑色背景防止透明穿透 */
         }
         
-        /* 闅愯棌 Jellyfin 榛樿鐨勬偓鍋滅伆鑹查伄缃?*/
+        /* 隐藏 Jellyfin 默认的悬停灰色遮罩 */
         body .itemsContainer.jf-large-thumbnail .card:hover .cardOverlayContainer,
         body .itemsContainer.jf-large-thumbnail .card:hover .cardOverlayTarget,
         body .itemsContainer.jf-large-thumbnail .card:hover .cardImageContainer::after {
@@ -331,24 +331,24 @@
             background-color: transparent !important;
         }
 
-        /* 闅愯棌闀挎寜澶氶€夋ā寮忎笅鐨勬祬钃濊壊閬僵锛屽苟鎻愬崌琚€変腑缂╃暐鍥剧殑浜害 */
+        /* 隐藏长按多选模式下的浅蓝色遮罩，并提升被选中缩略图的亮度 */
         body .itemsContainer.jf-large-thumbnail .card .itemSelectionPanel,
         body .itemsContainer.jf-large-thumbnail .card.selected .cardOverlayContainer,
         body .itemsContainer.jf-large-thumbnail .card.selected .cardOverlayTarget {
             background: transparent !important;
             background-color: transparent !important;
-            border: 3px solid #00a4dc !important; /* 淇濈暀涓嬭竟妗嗘彁绀哄凡琚€変腑 */
+            border: 3px solid #00a4dc !important; /* 保留下边框提示已被选中 */
             border-radius: var(--card-border-radius, 6px);
         }
         body .itemsContainer.jf-large-thumbnail .card.selected .cardScalable,
         body .itemsContainer.jf-large-thumbnail .card.selected .cardImageContainer {
-            filter: brightness(1.3) !important; /* 鎻愬崌 30% 浜害 */
+            filter: brightness(1.3) !important; /* 提升 30% 亮度 */
         }
 
 
-        /* --- 缂╃暐鍥炬ā寮忓己鍒舵斁澶ф柟妗?(鍖呭惈鍔ㄦ€佸垪鏁板拰榛樿璁剧疆) --- */
+        /* --- 缩略图模式强制放大方案 (包含动态列数和默认设置) --- */
         
-        /* 鍔ㄦ€佸垪鏁版帶鍒舵柟妗?*/
+        /* 动态列数控制方案 */
         body.jf-custom-cols .itemsContainer.jf-large-thumbnail .card {
             width: var(--jf-thumb-width) !important;
             flex-basis: var(--jf-thumb-width) !important;
@@ -357,7 +357,7 @@
             flex-shrink: 0 !important;
         }
 
-        /* 榛樿鑷姩妯″紡: 3鍒?*/
+        /* 默认自动模式: 3列 */
         body:not(.jf-custom-cols) .itemsContainer.jf-large-thumbnail .card {
             width: 32.53% !important;
             flex-basis: 32.53% !important;
@@ -366,14 +366,14 @@
             margin: 0.4% !important;
         }
 
-        /* 缁欏鍣ㄧ殑涓や晶鍑忓幓鍐呰竟璺濓紝浣垮畠鑳芥洿濂藉湴鍗犵敤鏁翠釜椤甸潰 */
+        /* 给容器的两侧减去内边距，使它能更好地占用整个页面 */
         body.jf-custom-cols .itemsContainer.jf-large-thumbnail,
         body:not(.jf-custom-cols) .itemsContainer.jf-large-thumbnail {
              padding-left: 0.2% !important;
              padding-right: 0.2% !important;
         }
         
-        /* 鍙纭繚鍐呴儴瀹瑰櫒璺熷崱鐗囩瓑瀹斤紝鍥剧墖灏变細闅忔瘮渚嬫斁澶?*/
+        /* 只要确保内部容器跟卡片等宽，图片就会随比例放大 */
         .itemsContainer.jf-large-thumbnail .cardBox,
         .itemsContainer.jf-large-thumbnail .cardScalable,
         .itemsContainer.jf-large-thumbnail .cardPadder,
@@ -382,16 +382,16 @@
             width: 100% !important;
         }
         .itemsContainer.jf-large-thumbnail .cardPadder {
-            padding-bottom: 56.25% !important; /* 寮哄埗 16:9 姣斾緥楂?*/
+            padding-bottom: 56.25% !important; /* 强制 16:9 比例高 */
         }
-        /* 纭繚鑷姩鎾斁灞傝鐩栨暣涓尯鍩?*/
+        /* 确保自动播放层覆盖整个区域 */
         .itemsContainer.jf-large-thumbnail .jf-autoplay-overlay {
             width: 100% !important;
             height: 100% !important;
             position: absolute !important;
             top: 0 !important;
             left: 0 !important;
-            z-index: 10 !important; /* 纭繚鍦ㄦ捣鎶ヤ箣涓?*/
+            z-index: 10 !important; /* 确保在海报之上 */
         }
         .itemsContainer.jf-large-thumbnail .cardText {
             font-size: 1.25em !important;
@@ -400,7 +400,7 @@
             font-size: 1.8em !important;
         }
 
-        /* 榛樿鑷姩妯″紡: 灏忓睆骞?2 鍒?*/
+        /* 默认自动模式: 小屏幕 2 列 */
         @media (max-width: 1600px) {
             body:not(.jf-custom-cols) .itemsContainer.jf-large-thumbnail .card { 
                 width: 47% !important; 
@@ -409,7 +409,7 @@
             }
         }
         
-        /* PC 绔繘搴︽潯鏍峰紡 */
+        /* PC 端进度条样式 */
         .jf-pc-progress-bg {
             position: absolute; bottom: 0; left: 0; width: 100%; height: 5px; 
             background: rgba(0,0,0,0.5); z-index: 100; display: none;
@@ -420,7 +420,7 @@
             background: #00a4dc; width: 0%;
         }
         
-        /* 鐙珛鐨勫叏灞€杩涘害鏉℃偓娴獥锛岀敤浜庤閬垮崱鐗囦簨浠跺啿绐佸拰鎻愪緵鏇村ソ浜や簰 */
+        /* 独立的全局进度条悬浮窗，用于规避卡片事件冲突和提供更好交互 */
         #jf-global-progress-popup {
             position: absolute; height: 16px; background: rgba(0,0,0,0.9);
             z-index: 9999999; display: none; cursor: pointer; border-radius: 4px;
@@ -432,7 +432,7 @@
             box-shadow: 0 0 2px rgba(0,0,0,0.8);
         }
 
-        /* 鐙珛杩涘害鏉＄殑灏忓瀷鎮诞棰勮鍥?*/
+        /* 独立进度条的小型悬浮预览图 */
         #jf-global-trickplay-preview {
             position: absolute; width: 320px; height: 180px;
             background-color: #000; z-index: 99999999; display: none;
@@ -441,7 +441,7 @@
             box-shadow: 0 4px 10px rgba(0,0,0,0.8);
             transform: translateX(-50%);
         }
-        /* 娴锋姤宸︿笅瑙掓挱鏀炬鏁拌鏍?*/
+        /* 海报左下角播放次数角标 */
         .jf-play-count-badge {
             position: absolute;
             bottom: 6px;
@@ -511,23 +511,23 @@
     async function markAsPlayed(itemId, auth) {
         if (!auth.userId || !auth.token) return;
 
-        // 1. 涔愯鏇存柊锛氬厛鍦ㄦ湰鍦?cache 涓鍔犳挱鏀炬鏁板苟鏇存柊鐣岄潰瑙掓爣
+        // 1. 乐观更新：先在本地 cache 中增加播放次数并更新界面角标
         const cached = itemCache.get(itemId);
         if (cached) {
             if (!cached.UserData) cached.UserData = {};
             cached.UserData.PlayCount = (cached.UserData.PlayCount || 0) + 1;
             cached.UserData.Played = true;
 
-            // 鏇存柊椤甸潰涓婃捣鎶ュ崱鐗囩殑鎾斁娆℃暟瑙掓爣
+            // 更新页面上海报卡片的播放次数角标
             const card = document.querySelector(`.card[data-id="${itemId}"]`);
             if (card) {
                 updatePlayCountBadge(card, itemId, cached);
             }
 
-            // 鏇存柊娴姩棰勮绐楀彛鏍囬鏍忎腑鐨勬挱鏀炬鏁拌鏍?
+            // 更新浮动预览窗口标题栏中的播放次数角标
             const titleBadges = document.querySelectorAll(`.jf-preview-instance[data-item-id="${itemId}"] .jf-title-play-count`);
             titleBadges.forEach(badge => {
-                badge.textContent = `[鎾斁: ${cached.UserData.PlayCount}]`;
+                badge.textContent = `[播放: ${cached.UserData.PlayCount}]`;
             });
         }
 
@@ -535,10 +535,10 @@
         try {
             const res = await fetch(url, { method: 'POST' });
             if (res.ok) {
-                // 2. 浠庢湇鍔″櫒鑾峰彇鏈€鏂颁俊鎭繘琛岀簿鍑嗘洿鏂颁笌鏍″噯
+                // 2. 从服务器获取最新信息进行精准更新与校准
                 const updatedInfo = await getItemInfo(itemId, auth);
                 if (updatedInfo) {
-                    // 闃叉楂樺苟鍙戞垨鑰呮湇鍔″櫒寤惰繜鍐欏叆瀵艰嚧娆℃暟鍥為€€锛屽彇鏈湴涔愯鏇存柊鍜屾湇鍔″櫒杩斿洖鐨勬渶澶у€?
+                    // 防止高并发或者服务器延迟写入导致次数回退，取本地乐观更新和服务器返回的最大值
                     const serverCount = updatedInfo.UserData?.PlayCount || 0;
                     const localCount = cached?.UserData?.PlayCount || 0;
                     if (!updatedInfo.UserData) updatedInfo.UserData = {};
@@ -552,7 +552,7 @@
                     }
                     const titleBadges = document.querySelectorAll(`.jf-preview-instance[data-item-id="${itemId}"] .jf-title-play-count`);
                     titleBadges.forEach(badge => {
-                        badge.textContent = `[鎾斁: ${updatedInfo.UserData.PlayCount}]`;
+                        badge.textContent = `[播放: ${updatedInfo.UserData.PlayCount}]`;
                     });
                 }
             }
@@ -642,7 +642,7 @@
 
     async function reportPlayback(itemId, auth, positionSec, isPaused, type = 'Progress') {
         if (!auth.token) return;
-        // API 淇: 'Started' 瀵瑰簲 /Sessions/Playing锛屽叾浠栧 'Progress'/'Stopped' 瀵瑰簲 /Sessions/Playing/{type}
+        // API 修正: 'Started' 对应 /Sessions/Playing，其他如 'Progress'/'Stopped' 对应 /Sessions/Playing/{type}
         const endpoint = type === 'Started' ? '' : `/${type}`;
         const url = `${auth.url}/Sessions/Playing${endpoint}?api_key=${auth.token}`;
         const body = {
@@ -664,10 +664,10 @@
     function bringToFront(winObj) {
         topZIndex++;
         winObj.el.style.zIndex = topZIndex;
-        winObj.timestamp = Date.now(); // 鏇存柊鏃堕棿鎴筹紝纭繚鍏跺湪鎺掑簭涓浜庘€滄渶鏂扳€?
+        winObj.timestamp = Date.now(); // 更新时间戳，确保其在排序中处于“最新”
         
-        // 纭繚宸︿笂瑙?(slot 1) 鐨勭獥鍙ｅ眰绾у缁堥珮浜庡乏涓嬭 (slot 2)
-        // 闃叉 slot 1 鐨?trickplay 棰勮鍥捐 slot 2 閬尅
+        // 确保左上角 (slot 1) 的窗口层级始终高于左下角 (slot 2)
+        // 防止 slot 1 的 trickplay 预览图被 slot 2 遮挡
         const slot1Win = previewWindows.find(w => w.slotIndex === 1);
         const slot2Win = previewWindows.find(w => w.slotIndex === 2);
         if (slot1Win && slot2Win) {
@@ -682,36 +682,36 @@
     }
 
 
-    // 璁＄畻鐭╅樀浣嶇疆
+    // 计算矩阵位置
     function getSlotStyle(slotIndex) {
         const padding = 10;
-        const headerOffset = 70; // 鏍囬鏍忛鐣?
-        const bottomOffset = 180; // 搴曢儴 Trickplay 棰勭暀
+        const headerOffset = 70; // 标题栏预留
+        const bottomOffset = 180; // 底部 Trickplay 预留
         const gap = 15;
         
         const screenW = window.innerWidth - padding * 2;
         const screenH = window.innerHeight - headerOffset - bottomOffset;
-        const uiH = 35 + 40; // 绐楀彛 Header(35) + Footer(40)
+        const uiH = 35 + 40; // 窗口 Header(35) + Footer(40)
 
-        // 璁＄畻鏈€澶у彲琛屽搴︼紝纭繚宸︿晶涓や釜鍨傜洿鍙犲姞鐨勫皬绐椾笉瓒呭嚭楂樺害闄愬埗锛屼笖鏃犻粦杈?(16:9)
+        // 计算最大可行宽度，确保左侧两个垂直叠加的小窗不超出高度限制，且无黑边 (16:9)
         // 2 * (w_small * 9/16 + uiH) + gap <= screenH
         let max_w_small = (screenH - (uiH * 2) - gap) / (18/16);
         
-        // 璁＄畻鍙充晶澶х獥鐨勬渶澶у搴?
+        // 计算右侧大窗的最大宽度
         // w_big * 9/16 + uiH <= screenH
         let max_w_big = (screenH - uiH) / (9/16);
 
-        // 鐞嗘兂姣斾緥鍒嗛厤锛氬彸渚у崰 65% 宸﹀彸
+        // 理想比例分配：右侧占 65% 左右
         let w_big = Math.min(max_w_big, screenW * 0.65);
         let w_small = Math.min(max_w_small, screenW - w_big - gap);
         
-        // 濡傛灉瀹藉害杩樻湁鍓╀綑锛屾寜姣斾緥绋嶅井鏀惧ぇ
+        // 如果宽度还有剩余，按比例稍微放大
         const remainingW = screenW - (w_big + w_small + gap);
         if (remainingW > 0) {
             const ratio = w_big / (w_big + w_small);
             w_big += remainingW * ratio;
             w_small += remainingW * (1 - ratio);
-            // 鍐嶆纭繚涓嶈秴鍑洪珮搴?
+            // 再次确保不超出高度
             w_big = Math.min(w_big, max_w_big);
             w_small = Math.min(w_small, max_w_small);
         }
@@ -719,7 +719,7 @@
         const h_big = (w_big * 9 / 16) + uiH;
         const h_small = (w_small * 9 / 16) + uiH;
 
-        // 棰勮 3 涓綅缃?
+        // 预设 3 个位置
         const positions = [
             { left: screenW - w_big, top: headerOffset, width: w_big, height: h_big },
             { left: 0, top: headerOffset, width: w_small, height: h_small },
@@ -785,7 +785,7 @@
 
             pool = pool.filter(card => playCountMap.get(card) === minPlayCount);
         } else {
-            // 浼樺厛鎸戦€夋挱鏀炬鏁颁负闆讹紙鏈挱鏀捐繃涓旀棤杩涘害鏉★級鐨勮棰?
+            // 优先挑选播放次数为零（未播放过且无进度条）的视频
             const unplayedPool = pool.filter(c => {
                 const playedInd = c.querySelector('.playedIndicator, .playedIndicatorContainer, .playCountIndicator, .playcount');
                 const isPlayed = playedInd && !playedInd.classList.contains('hide') && !playedInd.classList.contains('hidden') && playedInd.style.display !== 'none';
@@ -804,15 +804,15 @@
 
         const card = pool[Math.floor(Math.random() * pool.length)];
         const itemId = card.getAttribute('data-id');
-        currentlyOpeningIds.add(itemId); // 绔嬪嵆鏍囪涓烘鍦ㄥ姞杞斤紝闃叉澶氱獥骞跺彂璇锋眰绔炴€?
-        const title = card.querySelector('.cardText')?.innerText || '瑙嗛棰勮';
+        currentlyOpeningIds.add(itemId); // 立即标记为正在加载，防止多窗并发请求竞态
+        const title = card.querySelector('.cardText')?.innerText || '视频预览';
         let startSecond = autoplayStates.get(itemId) || null;
         createPreview(itemId, title, startSecond);
     }
 
     const reservedSlots = new Set();
 
-    // 瀵绘壘鍙敤妲戒綅
+    // 寻找可用槽位
     function findEmptySlot() {
         const occupiedSlots = previewWindows.map(w => w.slotIndex);
         for (let i = 0; i < MAX_WINDOWS; i++) {
@@ -829,7 +829,7 @@
         
         removeVRControlsForWindow(instanceObj);
 
-        // 娓呯悊 mxreality.js 娉ㄥ唽鍦?window/document 涓婄殑鍏ㄥ眬浜嬩欢鐩戝惉鍣?
+        // 清理 mxreality.js 注册在 window/document 上的全局事件监听器
         if (instanceObj.capturedWindowListeners) {
             instanceObj.capturedWindowListeners.forEach(item => {
                 item.target.removeEventListener(item.type, item.listener, item.options);
@@ -841,7 +841,7 @@
             window.jfVRCapturingActiveList = null;
         }
 
-        // 杩樺師璁板綍鐨勬粴鍔ㄥ睘鎬с€佹牱寮忎笌 class
+        // 还原记录的滚动属性、样式与 class
         if (instanceObj.capturedProperties) {
             instanceObj.capturedProperties.forEach(item => {
                 try {
@@ -872,19 +872,19 @@
     }
 
     function handleRandomWindowClose(closedSlotIndex) {
-        // 鎵惧埌鎵€鏈?slotIndex 澶т簬 closedSlotIndex 鐨勭獥鍙?
+        // 找到所有 slotIndex 大于 closedSlotIndex 的窗口
         const windowsToShift = previewWindows
             .filter(w => w.slotIndex > closedSlotIndex)
             .sort((a, b) => a.slotIndex - b.slotIndex);
             
-        // 灏嗗畠浠殑浣嶇疆鍚戝墠閫掕ˉ
+        // 将它们的位置向前递补
         windowsToShift.forEach(w => {
             w.slotIndex -= 1;
             const newStyle = getSlotStyle(w.slotIndex);
             Object.assign(w.el.style, newStyle);
         });
         
-        // 鍙湁鍦ㄩ殢鏈烘ā寮忎笅锛屾墠寮€鍚竴涓柊鐨勫～琛ョ┖浣?
+        // 只有在随机模式下，才开启一个新的填补空位
         if (isRandomMode || isTryNewRandomMode || isFavoriteRandomMode) openRandomWindow();
     }
 
@@ -898,7 +898,7 @@
 
         let slotIndex = findEmptySlot();
 
-        // 濡傛灉浣嶇疆婊′簡锛屾壘鍒版渶鏃╃殑閭ｄ釜
+        // 如果位置满了，找到最早的那个
         if (slotIndex === -1) {
             const oldest = previewWindows.sort((a, b) => a.timestamp - b.timestamp)[0];
             slotIndex = oldest.slotIndex;
@@ -924,17 +924,17 @@
         const isFav = info?.UserData?.IsFavorite || false;
         const playCount = info?.UserData?.PlayCount || 0;
 
-        // --- 澧炲姞瀛楀箷鎻愬彇閫昏緫 ---
+        // --- 增加字幕提取逻辑 ---
         const mediaSource = info?.MediaSources?.[0];
         const mediaSourceId = mediaSource?.Id;
-        // 杩囨护鍑烘枃鏈被瀛楀箷
+        // 过滤出文本类字幕
         const subtitleStreams = mediaSource?.MediaStreams?.filter(s => s.Type === 'Subtitle' && !['pgssub', 'dvdsub', 'dvbsub'].includes(s.Codec?.toLowerCase())) || [];
         
         let subtitleSelectHtml = '';
         let tracksHtml = '';
         if (subtitleStreams.length > 0) {
             subtitleSelectHtml = `<select class="jf-subtitle-select" style="background:#333; color:#fff; border:none; margin-right:10px; border-radius:3px; padding:2px; font-size:12px; outline:none; max-width:120px;">
-                <option value="-1">鍏抽棴瀛楀箷</option>
+                <option value="-1">关闭字幕</option>
                 ${subtitleStreams.map((s, i) => `<option value="${s.Index}">${s.Title || s.Language || `Subtitle ${i+1}`}</option>`).join('')}
             </select>`;
             
@@ -943,7 +943,7 @@
                 tracksHtml += `<track kind="subtitles" label="${s.Title || s.Language || `Subtitle ${s.Index}`}" src="${trackUrl}" srclang="${s.Language || 'en'}" data-index="${s.Index}">`;
             });
         }
-        // --- 缁撴潫瀛楀箷鎻愬彇閫昏緫 ---
+        // --- 结束字幕提取逻辑 ---
 
         const container = document.createElement('div');
         container.className = 'jf-preview-instance';
@@ -954,25 +954,25 @@
         const videoUrl = `${auth.url}/Items/${itemId}/Download?api_key=${auth.token}`;
         container.innerHTML = `
             <div class="jf-preview-header">
-                <span style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:50%;"><span class="jf-title-play-count" style="color:#aaa; font-size:11px; margin-right:8px;" title="鎾斁娆℃暟">[鎾斁: ${playCount}]</span>${title}</span>
+                <span style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:50%;"><span class="jf-title-play-count" style="color:#aaa; font-size:11px; margin-right:8px;" title="播放次数">[播放: ${playCount}]</span>${title}</span>
                 <div style="display:flex; align-items:center;">
                     ${subtitleSelectHtml}
                     <select class="jf-select-vr-mode" style="background:#333; color:#fff; border:none; margin-right:4px; border-radius:3px; padding:2px; font-size:12px; outline:none; display:none;">
-                        <option value="360_2d">360掳 2D</option>
-                        <option value="360_3d_lr">360掳 宸﹀彸</option>
-                        <option value="360_3d_tb">360掳 涓婁笅</option>
-                        <option value="180_2d">180掳 2D</option>
-                        <option value="180_3d_lr">180掳 宸﹀彸</option>
-                        <option value="plane_2d">骞抽潰褰遍櫌</option>
+                        <option value="360_2d">360° 2D</option>
+                        <option value="360_3d_lr">360° 左右</option>
+                        <option value="360_3d_tb">360° 上下</option>
+                        <option value="180_2d">180° 2D</option>
+                        <option value="180_3d_lr">180° 左右</option>
+                        <option value="plane_2d">平面影院</option>
                     </select>
-                    <div class="jf-btn-vr" style="cursor: pointer; padding: 2px 8px; background: #5533ff; border-radius: 4px; font-size: 11px; font-weight: bold; color: white; margin-right: 4px;" title="寮€鍚?鍏抽棴 VR 妯″紡">馃ソ VR</div>
-                    <div class="jf-btn-next-video" style="cursor: pointer; padding: 2px 8px; background: #e67e22; border-radius: 4px; font-size: 11px; font-weight: bold; color: white; margin-right: 4px;" title="鎾斁涓嬩竴涓?Part 鎴栬棰?>涓嬩竴閮?/div>
-                    <div class="jf-btn-mpv" style="cursor: pointer; padding: 2px 8px; background: #00b300; border-radius: 4px; font-size: 11px; font-weight: bold; color: white; margin-right: 4px;" title="浣跨敤 MPV Shim 鎾斁">MPV 鎾斁</div>
-                    <div class="jf-btn-next" style="cursor: pointer; padding: 2px 8px; background: #00a4dc; border-radius: 4px; font-size: 11px; font-weight: bold; color: white; margin-right: 4px; display: ${(isRandomMode || isTryNewRandomMode || isFavoriteRandomMode) ? 'block' : 'none'};">鎹竴涓?/div>
-                    <div class="jf-btn-reload" title="閲嶆柊鍔犺浇姝ょ獥鍙?>鍒锋柊</div>
-                    <div class="jf-btn-favorite" title="鍔犲叆/鍙栨秷鏈€鐖? style="background: ${isFav ? '#e6b800' : '#444'};" data-isfav="${isFav}">${isFav ? '宸叉渶鐖? : '鏈€鐖?}</div>
-                    <div class="jf-btn-delete" title="鍒犻櫎瑙嗛鏂囦欢">鍒犻櫎</div>
-                    <div class="jf-btn-close">鍏抽棴</div>
+                    <div class="jf-btn-vr" style="cursor: pointer; padding: 2px 8px; background: #5533ff; border-radius: 4px; font-size: 11px; font-weight: bold; color: white; margin-right: 4px;" title="开启/关闭 VR 模式">🥽 VR</div>
+                    <div class="jf-btn-next-video" style="cursor: pointer; padding: 2px 8px; background: #e67e22; border-radius: 4px; font-size: 11px; font-weight: bold; color: white; margin-right: 4px;" title="播放下一个 Part 或视频">下一部</div>
+                    <div class="jf-btn-mpv" style="cursor: pointer; padding: 2px 8px; background: #00b300; border-radius: 4px; font-size: 11px; font-weight: bold; color: white; margin-right: 4px;" title="使用 MPV Shim 播放">MPV 播放</div>
+                    <div class="jf-btn-next" style="cursor: pointer; padding: 2px 8px; background: #00a4dc; border-radius: 4px; font-size: 11px; font-weight: bold; color: white; margin-right: 4px; display: ${(isRandomMode || isTryNewRandomMode || isFavoriteRandomMode) ? 'block' : 'none'};">换一个</div>
+                    <div class="jf-btn-reload" title="重新加载此窗口">刷新</div>
+                    <div class="jf-btn-favorite" title="加入/取消最爱" style="background: ${isFav ? '#e6b800' : '#444'};" data-isfav="${isFav}">${isFav ? '已最爱' : '最爱'}</div>
+                    <div class="jf-btn-delete" title="删除视频文件">删除</div>
+                    <div class="jf-btn-close">关闭</div>
                 </div>
             </div>
             <div class="video-wrapper">
@@ -1007,15 +1007,15 @@
         };
         selectVR.onmousedown = (e) => e.stopPropagation();
         
-        // --- 澧炲姞瀛楀箷鍒囨崲閫昏緫 ---
+        // --- 增加字幕切换逻辑 ---
         const subtitleSelect = container.querySelector('.jf-subtitle-select');
         if (subtitleSelect) {
             const fileName = info?.Path || title || '';
-            // 鍖归厤甯歌鐨勭‖瀛楀箷鏍囪瘑锛屽 -C, -UC, -c.mp4, -UC_FHD 绛?
+            // 匹配常见的硬字幕标识，如 -C, -UC, -c.mp4, -UC_FHD 等
             const hasHardcodedSubs = /-(u?c)(?:[^a-z0-9]|$)/i.test(fileName);
 
             if (hasHardcodedSubs) {
-                subtitleSelect.value = "-1"; // 榛樿鍏抽棴澶栨寕瀛楀箷
+                subtitleSelect.value = "-1"; // 默认关闭外挂字幕
             } else {
                 const defaultStream = subtitleStreams.find(s => s.IsDefault) || subtitleStreams[0];
                 if (defaultStream) {
@@ -1040,13 +1040,13 @@
                 e.stopPropagation();
                 updateSubtitles();
             });
-            subtitleSelect.addEventListener('mousedown', (e) => e.stopPropagation()); // 闃叉鎷栨嫿骞叉壈
+            subtitleSelect.addEventListener('mousedown', (e) => e.stopPropagation()); // 防止拖拽干扰
             
             videoEl.addEventListener('loadedmetadata', updateSubtitles, { once: true });
         }
-        // --- 缁撴潫瀛楀箷鍒囨崲閫昏緫 ---
+        // --- 结束字幕切换逻辑 ---
         
-        // 鍒ゅ畾璺宠浆鏃堕棿锛氫紭鍏堜娇鐢ㄧ偣鍑绘椂鐨勯瑙堟椂闂达紝鍏舵鏄湇鍔″櫒璁板綍鐨勬椂闂?
+        // 判定跳转时间：优先使用点击时的预览时间，其次是服务器记录的时间
         const targetSeekTime = startSecond !== null ? startSecond : (resumeTicks / 10000000);
         
         if (targetSeekTime > 0) {
@@ -1059,9 +1059,9 @@
         previewWindows.push(winObj);
         currentlyOpeningIds.delete(itemId);
         bringToFront(winObj);
-        winObj.info = info; // 瀛樺偍 info 渚涘悗缁娇鐢?
+        winObj.info = info; // 存储 info 供后续使用
 
-        // 鑾峰彇 AdditionalParts
+        // 获取 AdditionalParts
         let additionalParts = [];
         try {
             const url = `${auth.url}/Videos/${itemId}/AdditionalParts?api_key=${auth.token}&userId=${auth.userId}`;
@@ -1092,21 +1092,21 @@
             btnNextVideo.onmousedown = (e) => e.stopPropagation();
         }
 
-        // 鍒濆鍖栭瑙堝浘涓庝氦浜?
+        // 初始化预览图与交互
         setupTrickplay(winObj, itemId, auth);
         setupInteractions(winObj);
 
         markAsPlayed(itemId, auth);
         reportPlayback(itemId, auth, 0, false, 'Started');
 
-        // 姣?10 绉掑嵆鏃朵笂鎶ヨ繘搴?
+        // 每 10 秒即时上报进度
         winObj.progressTimer = setInterval(() => {
             if (!videoEl.paused) {
                 reportPlayback(itemId, auth, videoEl.currentTime, false, 'Progress');
             }
         }, 10000);
 
-        // === 鏂板锛歁PV Shim 鎶曞睆鍔熻兘 ===
+        // === 新增：MPV Shim 投屏功能 ===
         const btnMPV = container.querySelector('.jf-btn-mpv');
         if (btnMPV) {
             btnMPV.onclick = async (e) => {
@@ -1114,30 +1114,30 @@
                 const auth = getAuth();
                 if (!auth) return;
 
-                // 鏆傚仠褰撳墠灏忕獥鍙ｇ殑瑙嗛鎾斁浠ヨ妭鐪佽祫婧?
+                // 暂停当前小窗口的视频播放以节省资源
                 if (videoEl) {
                     videoEl.pause();
                 }
 
                 const startTicks = Math.floor((videoEl ? videoEl.currentTime : 0) * 10000000);
 
-                // 鏌ヨ鎵€鏈?Sessions锛屽鎵?MPV Shim
+                // 查询所有 Sessions，寻找 MPV Shim
                 let mpvSession = null;
                 try {
                     const res = await fetch(`${auth.url}/Sessions?api_key=${auth.token}`);
                     if (!res.ok) throw new Error(`HTTP ${res.status}`);
                     const sessions = await res.json();
 
-                    // 璇婃柇锛氭墦鍗版墍鏈変細璇濓紝鏂逛究 F12 璋冭瘯
-                    console.log('[JF MPV] 褰撳墠鎵€鏈?Sessions:');
+                    // 诊断：打印所有会话，方便 F12 调试
+                    console.log('[JF MPV] 当前所有 Sessions:');
                     sessions.forEach(s => console.log(
                         `  Client="${s.Client}" | DeviceName="${s.DeviceName}" | SupportsMediaControl=${s.SupportsMediaControl} | Id=${s.Id}`
                     ));
 
-                    // 1. 绮剧‘鍖归厤瀹樻柟瀹㈡埛绔悕 "Jellyfin MPV Shim"
+                    // 1. 精确匹配官方客户端名 "Jellyfin MPV Shim"
                     mpvSession = sessions.find(s => s.Client === 'Jellyfin MPV Shim');
 
-                    // 2. 瀹芥澗鍖归厤锛欳lient 鎴?DeviceName 鍚?"mpv"锛堝ぇ灏忓啓涓嶆晱鎰燂級
+                    // 2. 宽松匹配：Client 或 DeviceName 含 "mpv"（大小写不敏感）
                     if (!mpvSession) {
                         mpvSession = sessions.find(s =>
                             (s.Client && s.Client.toLowerCase().includes('mpv')) ||
@@ -1145,7 +1145,7 @@
                         );
                     }
 
-                    // 3. 鏈€鍚庡厹搴曪細鏀寔濯掍綋鎺у埗 涓?闈炴祻瑙堝櫒 Web 瀹㈡埛绔?
+                    // 3. 最后兜底：支持媒体控制 且 非浏览器 Web 客户端
                     if (!mpvSession) {
                         mpvSession = sessions.find(s =>
                             s.SupportsMediaControl &&
@@ -1154,13 +1154,13 @@
                         );
                     }
                 } catch (err) {
-                    console.error('[JF MPV] 鑾峰彇 Sessions 澶辫触:', err);
-                    showToast('鉂?鏃犳硶鏌ヨ Sessions锛岃妫€鏌?F12 鎺у埗鍙?, 'warning');
+                    console.error('[JF MPV] 获取 Sessions 失败:', err);
+                    showToast('❌ 无法查询 Sessions，请检查 F12 控制台', 'warning');
                     return;
                 }
 
                 if (mpvSession) {
-                    console.log(`[JF MPV] 鎵惧埌鐩爣: Client="${mpvSession.Client}" Device="${mpvSession.DeviceName}"锛屾鍦ㄦ姇灞?..`);
+                    console.log(`[JF MPV] 找到目标: Client="${mpvSession.Client}" Device="${mpvSession.DeviceName}"，正在投屏...`);
                     try {
                         const playParams = new URLSearchParams({
                             api_key: auth.token,
@@ -1170,23 +1170,23 @@
                         });
                         const playUrl = `${auth.url}/Sessions/${mpvSession.Id}/Playing?${playParams}`;
                         const playRes = await fetch(playUrl, { method: 'POST' });
-                        console.log(`[JF MPV] 鎶曞睆鍝嶅簲: HTTP ${playRes.status}`);
+                        console.log(`[JF MPV] 投屏响应: HTTP ${playRes.status}`);
                         if (playRes.ok) {
-                            showToast(`馃幀 宸叉姇灞忓埌 ${mpvSession.Client} (${mpvSession.DeviceName})锛乣);
+                            showToast(`🎬 已投屏到 ${mpvSession.Client} (${mpvSession.DeviceName})！`);
                             return;
                         } else {
                             const errText = await playRes.text().catch(() => '');
-                            console.error('[JF MPV] 鎶曞睆澶辫触:', errText);
-                            showToast(`鉂?鎶曞睆澶辫触 HTTP ${playRes.status}锛岃鏌ョ湅 F12 鎺у埗鍙癭, 'warning');
+                            console.error('[JF MPV] 投屏失败:', errText);
+                            showToast(`❌ 投屏失败 HTTP ${playRes.status}，请查看 F12 控制台`, 'warning');
                         }
                     } catch (playErr) {
-                        console.error('[JF MPV] 鎶曞睆璇锋眰寮傚父:', playErr);
-                        showToast('鉂?鎶曞睆璇锋眰寮傚父锛岃鏌ョ湅 F12 鎺у埗鍙?, 'warning');
+                        console.error('[JF MPV] 投屏请求异常:', playErr);
+                        showToast('❌ 投屏请求异常，请查看 F12 控制台', 'warning');
                     }
                 } else {
-                    // 鏈壘鍒颁换浣曞彲鎺у埗鐨?MPV 浼氳瘽
-                    console.warn('[JF MPV] 鏈壘鍒板彲鐢?MPV Shim Session锛岃鏌ョ湅 F12 鎺у埗鍙颁腑鐨?Sessions 鍒楄〃纭瀹㈡埛绔悕绉般€?);
-                    showToast('鈿狅笍 鏈壘鍒?MPV Shim 浼氳瘽锛佺‘璁わ細1) MPV Shim 宸插惎鍔ㄥ苟鐧诲綍  2) F12 鏌ョ湅 [JF MPV] 鏃ュ織  3) 纭 Client 鍚嶇О', 'warning');
+                    // 未找到任何可控制的 MPV 会话
+                    console.warn('[JF MPV] 未找到可用 MPV Shim Session，请查看 F12 控制台中的 Sessions 列表确认客户端名称。');
+                    showToast('⚠️ 未找到 MPV Shim 会话！确认：1) MPV Shim 已启动并登录  2) F12 查看 [JF MPV] 日志  3) 确认 Client 名称', 'warning');
                 }
             };
         }
@@ -1206,7 +1206,7 @@
             btnReload.onclick = (e) => {
                 e.stopPropagation();
                 const currentTime = videoEl.currentTime;
-                // 閿€姣佺獥鍙ｄ絾涓嶈Е鍙戦€掕ˉ锛岃 createPreview 鐩存帴濉洖鍘熸Ы浣?
+                // 销毁窗口但不触发递补，让 createPreview 直接填回原槽位
                 destroyWindow(winObj);
                 createPreview(itemId, title, currentTime);
             };
@@ -1221,10 +1221,10 @@
                 if (success) {
                     currentlyFav = !currentlyFav;
                     btnFavorite.setAttribute('data-isfav', currentlyFav.toString());
-                    btnFavorite.innerText = currentlyFav ? '宸叉渶鐖? : '鏈€鐖?;
+                    btnFavorite.innerText = currentlyFav ? '已最爱' : '最爱';
                     btnFavorite.style.background = currentlyFav ? '#e6b800' : '#444';
                     
-                    // 灏濊瘯鍦ㄩ〉闈笂鎵惧埌瀵瑰簲鐨勫崱鐗囧苟鏇存柊鍏剁埍蹇冨浘鏍?
+                    // 尝试在页面上找到对应的卡片并更新其爱心图标
                     const card = document.querySelector(`.card[data-id="${itemId}"]`);
                     if (card) {
                         let favIcon = card.querySelector('.jf-custom-fav-icon');
@@ -1232,7 +1232,7 @@
                             if (!favIcon) {
                                 favIcon = document.createElement('div');
                                 favIcon.className = 'jf-custom-fav-icon';
-                                favIcon.innerHTML = '鉂わ笍';
+                                favIcon.innerHTML = '❤️';
                                 favIcon.style.position = 'absolute';
                                 favIcon.style.top = '5px';
                                 favIcon.style.right = '5px';
@@ -1253,17 +1253,17 @@
         if (btnDelete) {
             btnDelete.onclick = async (e) => {
                 e.stopPropagation();
-                if (confirm('纭畾瑕佸垹闄ゆ瑙嗛鍚楋紵\n璀﹀憡锛氳繖灏嗕粠鏈嶅姟鍣ㄥ拰鐗╃悊纭洏涓婃案涔呭垹闄よ鏂囦欢锛?)) {
+                if (confirm('确定要删除此视频吗？\n警告：这将从服务器和物理硬盘上永久删除该文件！')) {
                     const currentSlot = winObj.slotIndex;
                     destroyWindow(winObj);
                     
-                    // 璋冪敤 API 鍒犻櫎
+                    // 调用 API 删除
                     await deleteItem(itemId, auth);
                     
-                    // 瑙﹀彂閫掕ˉ锛堝唴閮ㄤ細鍒ゆ柇鏄惁寮€鍚柊绐楀彛锛?
+                    // 触发递补（内部会判断是否开启新窗口）
                     handleRandomWindowClose(currentSlot);
                     
-                    // 浠庡綋鍓嶉〉闈?DOM 涓Щ闄よ鍗＄墖锛岄伩鍏嶅啀娆¤闅忔満鎶戒腑
+                    // 从当前页面 DOM 中移除该卡片，避免再次被随机抽中
                     const card = document.querySelector(`.card[data-id="${itemId}"]`);
                     if (card) {
                         card.remove();
@@ -1280,7 +1280,7 @@
         };
     }
 
-    // 澶勭悊绮剧伒鍥?
+    // 处理精灵图
     function setupTrickplay(winObj, itemId, auth) {
         const video = winObj.el.querySelector('.jf-video-el');
         const thumbBox = winObj.el.querySelector('.jf-trickplay-thumb');
@@ -1315,34 +1315,34 @@
         winObj.updateThumb = update;
 
         video.addEventListener('mousemove', (e) => {
-            // 妯″紡锛氬湪搴曢儴 1/8 鍖哄煙鎴栬€呮鍦ㄦ粴鍔ㄥ鎵捐繘搴︽椂锛屾樉绀哄師鐢熸帶浠?
+            // 模式：在底部 1/8 区域或者正在滚动寻找进度时，显示原生控件
             if (e.offsetY > video.offsetHeight * 0.875 || winObj.isWheelSeeking) {
                 video.controls = true; 
-                // 濡傛灉姝ｅ湪婊氳疆蹇繘锛屽垯涓嶈鏍规嵁榧犳爣浣嶇疆鏇存柊棰勮鍥撅紝閬垮厤鍐茬獊
+                // 如果正在滚轮快进，则不要根据鼠标位置更新预览图，避免冲突
                 if (winObj.isWheelSeeking) return;
 
                 const rect = video.getBoundingClientRect();
                 const percent = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
                 update(video.duration * percent, percent);
             } else {
-                video.controls = false; // 绂诲紑鍖哄煙闅愯棌鎺т欢
+                video.controls = false; // 离开区域隐藏控件
                 if (!winObj.isWheelSeeking) thumbBox.style.display = 'none';
             }
         });
 
         video.addEventListener('mouseleave', () => {
             video.controls = false;
-            // 濡傛灉涓嶆槸鍦ㄦ粴鍔ㄤ腑锛屽垯闅愯棌
+            // 如果不是在滚动中，则隐藏
             if (!winObj.isWheelSeeking) thumbBox.style.display = 'none';
         });
 
-        // 褰撹棰戠湡姝ｈ烦杞畬鎴愬悗锛屼氦鐢卞欢鏃跺櫒鍘婚殣钘忕缉鐣ュ浘锛岄槻姝㈣烦鍔?
+        // 当视频真正跳转完成后，交由延时器去隐藏缩略图，防止跳动
         video.addEventListener('seeked', () => {
-             // 淇濈暀涓虹┖锛屼氦鐢?wheelTimer/hideTimer 鑷劧绠＄悊
+             // 保留为空，交由 wheelTimer/hideTimer 自然管理
         });
     }
 
-    // 鑷姩鎾斁涓庡垎娈靛鐞嗙浉鍏宠緟鍔╁嚱鏁?
+    // 自动播放与分段处理相关辅助函数
     function formatTime(seconds) {
         if (isNaN(seconds)) return '0:00';
         const hrs = Math.floor(seconds / 3600);
@@ -1368,7 +1368,7 @@
             partText = ` (Part ${winObj.currentPartIndex + 1}/${winObj.partsList.length})`;
         }
 
-        headerTitleSpan.innerHTML = `<span class="jf-title-play-count" style="color:#aaa; font-size:11px; margin-right:8px;" title="鎾斁娆℃暟">[鎾斁: ${playCount}]</span>${baseTitle}${partText}`;
+        headerTitleSpan.innerHTML = `<span class="jf-title-play-count" style="color:#aaa; font-size:11px; margin-right:8px;" title="播放次数">[播放: ${playCount}]</span>${baseTitle}${partText}`;
     }
 
     async function playPartInWindow(winObj, partIndex) {
@@ -1435,7 +1435,7 @@
             itemCache.set(nextItemId, info);
         }
 
-        // 鑾峰彇鏂?Item 鐨?AdditionalParts
+        // 获取新 Item 的 AdditionalParts
         let additionalParts = [];
         try {
             const url = `${winObj.auth.url}/Videos/${nextItemId}/AdditionalParts?api_key=${winObj.auth.token}&userId=${winObj.auth.userId}`;
@@ -1502,7 +1502,7 @@
         const videoEl = winObj.el.querySelector('.jf-video-el');
         if (!videoEl) return;
 
-        // 1. 妫€鏌ュ綋鍓?item 鏄惁鏈夋湭鎾斁瀹岀殑鍒嗘 (AdditionalParts)
+        // 1. 检查当前 item 是否有未播放完的分段 (AdditionalParts)
         if (winObj.partsList && winObj.currentPartIndex < winObj.partsList.length - 1) {
             const nextPartIndex = winObj.currentPartIndex + 1;
             console.log(`[JF] Playing next part (${nextPartIndex + 1}/${winObj.partsList.length}) of item ${winObj.mainItemId}`);
@@ -1510,7 +1510,7 @@
             return;
         }
 
-        // 2. 鍚﹀垯锛屽鎵惧悓涓€涓枃浠跺す/Season 涓殑涓嬩竴涓?Item (涓嬩竴闆?鍚屼竴涓枃浠跺す涓嬬殑涓嬩竴閮ㄥ奖鐗?
+        // 2. 否则，寻找同一个文件夹/Season 中的下一个 Item (下一集/同一个文件夹下的下一部影片)
         const nextItem = await getNextItemInFolder(winObj.mainItemId, winObj.info, winObj.auth);
         if (nextItem) {
             console.log(`[JF] Autoplay transitioning to next item in folder: ${nextItem.title} (ID: ${nextItem.id})`);
@@ -1518,7 +1518,7 @@
             return;
         }
 
-        // 3. 鍏滃簳锛氬鎵鹃〉闈笂鐨勪笅涓€涓崱鐗?
+        // 3. 兜底：寻找页面上的下一个卡片
         const currentCard = document.querySelector(`.card[data-id="${winObj.mainItemId}"]`);
         if (currentCard) {
             let nextCard = currentCard.nextElementSibling;
@@ -1539,7 +1539,7 @@
         console.log('[JF] No next part or next item/card found.');
     }
 
-    // 浜や簰涓庢墜鍔ㄨ皟鏁?
+    // 交互与手动调整
     function toggleVRForWindow(winObj) {
         const btn = winObj.el.querySelector('.jf-btn-vr');
         const select = winObj.el.querySelector('.jf-select-vr-mode');
@@ -1549,12 +1549,12 @@
 
         if (winObj.vrActive) {
             closeVRForWindow(winObj);
-            btn.innerHTML = '馃ソ VR';
+            btn.innerHTML = '🥽 VR';
             btn.style.backgroundColor = '#5533ff';
             select.style.display = 'none';
         } else {
             winObj.vrActive = true;
-            btn.innerHTML = '鉂?閫€鍑?;
+            btn.innerHTML = '❌ 退出';
             btn.style.backgroundColor = '#d63031';
             select.style.display = 'inline-block';
             initVRForWindow(winObj);
@@ -1575,7 +1575,7 @@
         vrContainer.style.display = 'block';
         videoEl.style.opacity = '0';
 
-        // 澶囦唤鍏抽敭鐨勫叏灞€婊氬姩灞炴€т笌鏍峰紡锛堥槻鑼?mxreality.js 閫氳繃鐩存帴璧嬪€艰鐩栬€岀粫杩?addEventListener 鍔寔锛?
+        // 备份关键的全局滚动属性与样式（防范 mxreality.js 通过直接赋值覆盖而绕过 addEventListener 劫持）
         const targets = [
             { obj: window, name: 'window' },
             { obj: document, name: 'document' },
@@ -1605,12 +1605,12 @@
             winObj.capturedProperties.push({ target: document.documentElement, prop: 'className', value: document.documentElement.className });
         }
 
-        // 鍚敤鍏ㄥ眬鍔寔閫昏緫锛岀敤浜庢崟鑾峰紓姝?寤惰繜娉ㄥ唽鐨?mxreality.js 鐩戝惉鍣ㄥ苟灞忚斀鍏ㄥ眬婊氬姩鍔寔
+        // 启用全局劫持逻辑，用于捕获异步/延迟注册的 mxreality.js 监听器并屏蔽全局滚动劫持
         winObj.capturedWindowListeners = [];
         window.jfVRCapturingActiveList = winObj.capturedWindowListeners;
         window.jfVRCapturing = true;
 
-        // 5绉掑悗鍋滄鍏ㄥ眬鍔寔鎹曡幏锛堟鏃?mxreality.js 鍐呴儴寮傛鍒濆鍖栨祦绋嬪潎宸插畬姣曪級
+        // 5秒后停止全局劫持捕获（此时 mxreality.js 内部异步初始化流程均已完毕）
         setTimeout(() => {
             if (window.jfVRCapturingActiveList === winObj.capturedWindowListeners) {
                 window.jfVRCapturing = false;
@@ -1618,7 +1618,7 @@
             }
         }, 5000);
 
-        // 鍒濆鍖?Three.js
+        // 初始化 Three.js
         const scene = new THREE.Scene();
         const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
         renderer.setPixelRatio(window.devicePixelRatio);
@@ -1674,7 +1674,7 @@
 
         initVRControlsForWindow(winObj);
 
-        // 浣跨敤 ResizeObserver 鐩戝惉绐楀彛灏哄鍙樺寲浠ヨ皟鏁?canvas
+        // 使用 ResizeObserver 监听窗口尺寸变化以调整 canvas
         if (winObj.resizeObserver) {
             winObj.resizeObserver.disconnect();
         }
@@ -1714,7 +1714,7 @@
 
         removeVRControlsForWindow(winObj);
 
-        // 娓呯悊 mxreality.js 娉ㄥ唽鍦?window/document 涓婄殑鍏ㄥ眬浜嬩欢鐩戝惉鍣?
+        // 清理 mxreality.js 注册在 window/document 上的全局事件监听器
         if (winObj.capturedWindowListeners) {
             winObj.capturedWindowListeners.forEach(item => {
                 item.target.removeEventListener(item.type, item.listener, item.options);
@@ -1726,7 +1726,7 @@
             window.jfVRCapturingActiveList = null;
         }
 
-        // 杩樺師璁板綍鐨勬粴鍔ㄥ睘鎬с€佹牱寮忎笌 class
+        // 还原记录的滚动属性、样式与 class
         if (winObj.capturedProperties) {
             winObj.capturedProperties.forEach(item => {
                 try {
@@ -1860,7 +1860,7 @@
         if (!vrContainer) return;
 
         winObj.mouseMoveHandler = function(e) {
-            if (e.buttons === 1) return; // 蹇界暐宸﹂敭鎷栨嫿浠ュ厑璁哥獥鍙ｆ嫋鍔?缂╂斁
+            if (e.buttons === 1) return; // 忽略左键拖拽以允许窗口拖动/缩放
 
             if (!winObj.vrInstance || !winObj.vrInstance.controls) return;
 
@@ -1898,7 +1898,7 @@
         };
 
         winObj.mouseDownHandler = function(e) {
-            // 闃绘宸﹂敭 mousedown 浜嬩欢鍦?VR 瀹瑰櫒鍐呭啋娉★紝浠ラ伩鍏嶈Е鍙?jf-preview-instance 鐨勬嫋鎷藉姩浣滃共鎵?look-around
+            // 阻止左键 mousedown 事件在 VR 容器内冒泡，以避免触发 jf-preview-instance 的拖拽动作干扰 look-around
             if (e.button === 0) {
                 e.stopPropagation();
             }
@@ -1913,7 +1913,7 @@
                 } else if (e.button === 3) {
                     startZoomingForWindow(winObj, false);
                 } else if (e.button === 1) {
-                    toggleVRForWindow(winObj); // 涓敭閫€鍑?VR 妯″紡
+                    toggleVRForWindow(winObj); // 中键退出 VR 模式
                 }
             }
         };
@@ -1950,7 +1950,7 @@
         const resizer = el.querySelector('.resizer-se');
         const video = el.querySelector('.jf-video-el');
 
-        // 鍙抽敭鐐瑰嚮鏍囬鏍忔椂锛屼唬鐞嗚Е鍙戝搴旀捣鎶ョ殑鍘熺敓鍙抽敭鑿滃崟
+        // 右键点击标题栏时，代理触发对应海报的原生右键菜单
         header.addEventListener('contextmenu', (e) => {
             e.preventDefault();
             e.stopPropagation();
@@ -1967,7 +1967,7 @@
             }
         });
 
-        // 鏃犺鐐瑰嚮鍝噷锛岄兘缃《锛涗腑閿偣鍑诲垯鍏抽棴
+        // 无论点击哪里，都置顶；中键点击则关闭
         el.addEventListener('mousedown', (e) => {
             bringToFront(winObj);
             if (e.button === 1) {
@@ -1981,12 +1981,12 @@
                 destroyWindow(winObj);
                 handleRandomWindowClose(currentSlot);
             }
-        }, true); // 浣跨敤鎹曡幏妯″紡浼樺厛澶勭悊涓敭鍏抽棴
+        }, true); // 使用捕获模式优先处理中键关闭
 
         const startDrag = (e) => {
-            if (e.button !== 0) return; // 鍙湁宸﹂敭鍙互鎷栧姩
+            if (e.button !== 0) return; // 只有左键可以拖动
             if (e.target.classList.contains('jf-btn-close') || e.target.classList.contains('jf-btn-delete') || e.target.classList.contains('jf-btn-next') || e.target.classList.contains('jf-btn-favorite') || e.target.classList.contains('jf-btn-reload') || e.target.closest('.jf-subtitle-select') || e.target.classList.contains('jf-btn-vr') || e.target.classList.contains('jf-btn-next-video') || e.target.closest('.jf-select-vr-mode')) return;
-            // 濡傛灉鐐瑰嚮鐨勬槸瑙嗛鍖哄煙涓斿湪搴曢儴 20% 鑼冨洿鍐咃紙閫氬父鏄繘搴︽潯锛夛紝鍒欎笉瑙﹀彂鎷栧姩
+            // 如果点击的是视频区域且在底部 20% 范围内（通常是进度条），则不触发拖动
             if (e.target.tagName === 'VIDEO' && e.offsetY > e.target.offsetHeight * 0.8) return;
 
             isDragging = true;
@@ -2003,7 +2003,7 @@
                 scheduleUpdateOverlaps();
             };
 
-            // 鎷︽埅鐐瑰嚮浜嬩欢浠ラ槻姝㈣瑙﹀彂鏆傚仠
+            // 拦截点击事件以防止误触发暂停
             const onClick = (ev) => {
                 if (moved) {
                     ev.stopImmediatePropagation();
@@ -2041,7 +2041,7 @@
             e.preventDefault();
         };
 
-        // 婊氳疆蹇繘蹇€€ logic - 浼樺寲娴佺晠搴?
+        // 滚轮快进快退 logic - 优化流畅度
         let wheelTimer = null;
         let hideTimer = null;
         
@@ -2051,11 +2051,11 @@
             const duration = video.duration || 0;
             if (duration === 0) return;
 
-            // 鏍囪姝ｅ湪浣跨敤婊氳疆瀵绘壘锛屾樉绀哄師鐢熸帶浠?
+            // 标记正在使用滚轮寻找，显示原生控件
             winObj.isWheelSeeking = true;
             video.controls = true;
 
-            // 绔嬪嵆璁＄畻骞舵洿鏂拌棰戞椂闂达紝浠ュ悓姝ュ師鐢熻繘搴︽潯
+            // 立即计算并更新视频时间，以同步原生进度条
             let targetTime = video.currentTime;
             if (e.deltaY > 0) {
                 targetTime = Math.min(duration, targetTime + step);
@@ -2065,7 +2065,7 @@
             
             video.currentTime = targetTime;
             
-            // 瀹炴椂鏄剧ず trickplay 缂╃暐鍥?
+            // 实时显示 trickplay 缩略图
             if (typeof winObj.updateThumb === 'function') {
                 winObj.updateThumb(targetTime, targetTime / duration);
             }
@@ -2075,20 +2075,20 @@
             
             wheelTimer = setTimeout(() => {
                 if (!video.paused) video.play().catch(() => { });
-                // 蹇繘鍚庝笂鎶ヤ竴娆¤繘搴︼紝纭繚鍚屾
+                // 快进后上报一次进度，确保同步
                 reportPlayback(winObj.itemId, winObj.auth, video.currentTime, false, 'Progress');
                 
-                // 寤惰繜 0.3 绉掑悗鍏抽棴棰勮鍜屾帶鍒舵潯
+                // 延迟 0.3 秒后关闭预览和控制条
                 hideTimer = setTimeout(() => { 
                     winObj.isWheelSeeking = false;
                     const thumbBox = winObj.el.querySelector('.jf-trickplay-thumb');
                     if (thumbBox) thumbBox.style.display = 'none';
-                    // 濡傛灉涓嶅湪搴曢儴 1/8 鐑尯锛堝嵆甯歌杩涘害鏉″尯鍩燂級锛屽垯鍏抽棴鍘熺敓鎺т欢灞曠ず
+                    // 如果不在底部 1/8 热区（即常规进度条区域），则关闭原生控件展示
                     if (!video.matches(':hover') || e.offsetY <= video.offsetHeight * 0.875) {
                          video.controls = false;
                     }
                 }, 300);
-            }, 100); // 绋嶅井澧炲姞闃叉姈锛屽噺灏戦绻佺殑 API 涓婃姤
+            }, 100); // 稍微增加防抖，减少频繁的 API 上报
         }, { passive: false });
     }
 
@@ -2100,7 +2100,7 @@
         `;
         document.head.appendChild(style);
 
-    // --- 鍒涘缓鐪熸鐨勮劚绂绘鏋剁殑鎮诞杩涘害鏉＄粍浠?---
+    // --- 创建真正的脱离框架的悬浮进度条组件 ---
     let globalProgressPopup = document.createElement('div');
     globalProgressPopup.id = 'jf-global-progress-popup';
     globalProgressPopup.innerHTML = '<div class="jf-popup-bar"></div>';
@@ -2134,7 +2134,7 @@
               if (pb) pb.style.width = (clickedPercent * 100) + '%';
          }
 
-         // 鏇存柊鎮诞 trickplay 鐨勭敾闈㈠拰浣嶇疆
+         // 更新悬浮 trickplay 的画面和位置
          const auth = getAuth();
          if (auth) {
              const tp = getTrickplayInfo(cItemInfo);
@@ -2161,14 +2161,14 @@
              }
              
              globalTrickplayPreview.style.display = 'block';
-             // 闄愬埗宸﹀彸杈圭晫锛岄伩鍏嶈秴鍑哄睆骞?
+             // 限制左右边界，避免超出屏幕
              const safeX = Math.max(160, Math.min(window.innerWidth - 160, clientX));
              globalTrickplayPreview.style.left = (safeX + window.scrollX) + 'px';
-             // 鏀逛负鍦ㄨ繘搴︽潯涓嬫柟鏄剧ず锛岄伩鍏嶆尅浣忓崱鐗囧唴姝ｅ湪鎾斁鐨勮棰?
+             // 改为在进度条下方显示，避免挡住卡片内正在播放的视频
              globalTrickplayPreview.style.top = (pRect.bottom + window.scrollY + 10) + 'px'; 
          }
          
-         // 涓嶈鏄帹鎷戒腑杩樻槸鍗曞嚮涓紝閮藉彲浠ユ洿鏂颁竴娆″簳灞傜殑瀹為檯鎾斁鍗＄墖杩涘害
+         // 不论是推拽中还是单击中，都可以更新一次底层的实际播放卡片进度
          if (doSeek) {
               const cardEl = document.querySelector(`[data-id="${itemId}"].card`);
               if (cardEl) {
@@ -2177,20 +2177,20 @@
                       rv.currentTime = cSeek;
                       rv.play().catch(()=>{});
                   } else {
-                      // 灏嗘捣鎶ヨ儗鍚庣殑 trickplay 鐢婚潰涔熷悓姝ユ嫧鍔ㄨ繃鍘?
+                      // 将海报背后的 trickplay 画面也同步拨动过去
                       const rect = cardEl.getBoundingClientRect();
                       const evt = new MouseEvent('mousemove', { clientX: clientX, clientY: rect.top + rect.height/2, bubbles: true });
                       cardEl.dispatchEvent(evt);
                   }
                   
-                  // 鍚屾鏇存柊搴曟灏忚繘搴︽潯
+                  // 同步更新底框小进度条
                   const fakePb = cardEl.querySelector('.jf-pc-progress-bar');
                   if (fakePb) fakePb.style.width = (clickedPercent * 100) + '%';
               }
          }
     }
 
-    // --- 鐙珛杩涘害鏉℃嫋鍔ㄤ笌鎮仠浜嬩欢鐢熷懡鍛ㄦ湡 ---
+    // --- 独立进度条拖动与悬停事件生命周期 ---
     ['mousedown', 'touchstart'].forEach(evt => {
         globalProgressPopup.addEventListener(evt, (e) => {
              e.preventDefault();
@@ -2213,7 +2213,7 @@
         document.addEventListener(evt, () => {
              if (isDraggingGlobalProgress) {
                  isDraggingGlobalProgress = false;
-                 // 濡傛灉涓嶅湪杩涘害鏉″唴閮ㄦ澗鎵嬶紝闅愯棌 trickplay 灏忛瑙?
+                 // 如果不在进度条内部松手，隐藏 trickplay 小预览
                  globalTrickplayPreview.style.display = 'none';
              }
         });
@@ -2221,7 +2221,7 @@
 
     globalProgressPopup.addEventListener('mousemove', (e) => {
         if (!isDraggingGlobalProgress) {
-             handleProgressInteraction(e, false); // 浠呰窡闅忓嚭棰勮锛屼笉鏇存柊瀹為檯杩涘害
+             handleProgressInteraction(e, false); // 仅跟随出预览，不更新实际进度
         }
     });
 
@@ -2244,36 +2244,36 @@
          const durSec = cItemInfo.RunTimeTicks / 10000000;
          let currentSeek = autoplayStates.get(itemId) || 0;
 
-         // 鍔犲叆婊氳疆杈圭晫闄愬埗锛屽悜涓嬫粴蹇繘锛屽悜涓婃粴鍊掗€€锛堥檷浣庨€熷害锛?
-         const step = 5; // 闄嶄綆涓烘瘡娆℃粴鍔?5 绉?
+         // 加入滚轮边界限制，向下滚快进，向上滚倒退（降低速度）
+         const step = 5; // 降低为每次滚动 5 秒
          if (e.deltaY > 0) {
               currentSeek = Math.min(durSec, currentSeek + step);
          } else {
               currentSeek = Math.max(0, currentSeek - step);
          }
 
-         // 璁＄畻鍋囪繘搴?X 鍧愭爣浣嶇疆浼犻€掔粰浜や簰鏍稿績
+         // 计算假进度 X 坐标位置传递给交互核心
          const pRect = globalProgressPopup.getBoundingClientRect();
          const fakeClientX = pRect.left + (currentSeek / durSec) * pRect.width;
          
          handleProgressInteraction({ clientX: fakeClientX }, true);
     }, { passive: false });
 
-    // --- 鍗＄墖涓婃粴杞揩杩涘揩閫€ ---
+    // --- 卡片上滚轮快进快退 ---
     document.addEventListener('wheel', (e) => {
-        // 濡傛灉鏄湪杩涘害鏉″脊绐椾笂婊氬姩锛屽凡缁忔湁鍗曠嫭閫昏緫澶勭悊
+        // 如果是在进度条弹窗上滚动，已经有单独逻辑处理
         if (e.target.closest('#jf-global-progress-popup')) return;
 
         const card = e.target.closest('[data-id].card');
         if (!card) return;
 
-        // 濡傛灉鍘熺敾寮曟搸鍜岃嚜鍔ㄨ疆鎾兘娌″紑锛屽氨涓嶆帴绠℃粴杞?
+        // 如果原画引擎和自动轮播都没开，就不接管滚轮
         if (typeof isRealVideoPreview !== 'undefined' && !isRealVideoPreview && !isAutoPlayEnabled) return;
 
         const rv = card.querySelector('.jf-real-video');
         const overlay = card.querySelector('.jf-sprite-overlay');
         
-        // 鍒ゆ柇褰撳墠鏄惁鏈夋鍦ㄥ睍鐜扮殑棰勮
+        // 判断当前是否有正在展现的预览
         let isVideoPlaying = isRealVideoPreview && rv && rv.style.display === 'block';
         let isSpritePlaying = !isRealVideoPreview && overlay && overlay.style.display === 'block';
         
@@ -2304,8 +2304,8 @@
             rv.currentTime = currentSeek;
         }
         
-        // 涓轰簡鍜屾嫋鎷藉悓姝ワ紝鎴戜滑涔熻皟鐢?handleProgressInteraction 鏉ユ洿鏂?UI
-        // 鎴栬€呰嚦灏戞洿鏂板簳閮ㄧ殑杩涘害鏉¤繘搴?
+        // 为了和拖拽同步，我们也调用 handleProgressInteraction 来更新 UI
+        // 或者至少更新底部的进度条进度
         const percent = currentSeek / durSec;
         const fakePb = card.querySelector('.jf-pc-progress-bar');
         if (fakePb) fakePb.style.width = (percent * 100) + '%';
@@ -2314,10 +2314,10 @@
              const pb = globalProgressPopup.firstChild;
              if (pb) pb.style.width = (percent * 100) + '%';
              
-             // 濡傛灉鎯宠瀹冨儚鏄湪鎷栧姩涓€鏍凤紝涔熷彲浠ョ洿鎺ヨ绠楃櫨鍒嗘瘮瀵瑰簲鍧愭爣骞惰皟鐢?handleProgressInteraction
-             // 浣嗙洿鎺ユ敼杩涘害鏉″苟鏇存柊 autoplayStates 宸茬粡瓒冲锛宮ousemove 绛変細鍚屾
+             // 如果想让它像是在拖动一样，也可以直接计算百分比对应坐标并调用 handleProgressInteraction
+             // 但直接改进度条并更新 autoplayStates 已经足够，mousemove 等会同步
              
-             // 涔熷悓姝ヤ竴涓?trickplay
+             // 也同步一下 trickplay
              const auth = getAuth();
              if (auth && globalTrickplayPreview.style.display === 'block') {
                  const tp = getTrickplayInfo(cItemInfo);
@@ -2340,21 +2340,21 @@
         }
     }, { passive: false });
 
-     // --- 鍏ㄥ眬浜や簰浜嬩欢鎷︽埅涓庡垎鍙?(寮哄埗鐗╃悊鍒囨柇搴曞眰妗嗘灦浠ｇ悊) ---
+     // --- 全局交互事件拦截与分发 (强制物理切断底层框架代理) ---
     let clickStartTime = 0;
     const pointerEvents = ['pointerdown', 'pointerup', 'mousedown', 'mouseup', 'click', 'touchstart', 'touchend'];
     
     pointerEvents.forEach(evt => {
         document.addEventListener(evt, async (e) => {
-            // 鐙珛寮圭獥缁勪欢锛屼笉鍐嶉渶瑕佹嫤鎴唴閮ㄤ簨浠?
+            // 独立弹窗组件，不再需要拦截内部事件
             if (e.target.closest('#jf-global-progress-popup')) return;
 
-            // 2. 闀挎寜鏃堕棿璁板綍
+            // 2. 长按时间记录
             if (evt === 'mousedown' || evt === 'touchstart' || evt === 'pointerdown') {
                 clickStartTime = Date.now();
             }
 
-            // 3. 鎷︽埅鍘熺敾寮曟搸鎴栧揩鐓у紩鎿庡湪涓婁笁鍒嗕箣浜屽尯鍩熺殑寮傚父浜嬩欢
+            // 3. 拦截原画引擎或快照引擎在上三分之二区域的异常事件
             const card = e.target.closest('[data-id].card');
             if (!card || e.target.closest('.jf-preview-instance') || e.target.closest('.jf-btn-close')) return;
 
@@ -2362,12 +2362,12 @@
             const clientY = e.clientY ?? (e.touches && e.touches.length > 0 ? e.touches[0].clientY : rect.top);
             const mouseY = clientY - rect.top;
 
-            // 濡傛灉鏄師鐢诲紩鎿庯紝涓嶅脊绐楋紝涓婇潰2/3姝诲瘋锛堟垨鐢ㄤ簬瑙﹀彂瓒呰繃3鍒楁椂鐨勬墜鍔ㄦ挱鏀撅級锛屼笅闈?/3鍘熺敓鍔ㄤ綔
+            // 如果是原画引擎，不弹窗，上面2/3死寂（或用于触发超过3列时的手动播放），下面1/3原生动作
             if (typeof isRealVideoPreview !== 'undefined' && isRealVideoPreview) {
                  if (mouseY <= rect.height * 0.66) {                     
-                     // 鍏ㄥ眬鎵嬪姩鎾斁/鏆傚仠寮€鍏?(涓嶈鍒楁暟锛岀偣鍑讳笂 2/3 鍖哄煙鍧囧彲鎺у埗鎾斁涓庢殏鍋?
+                     // 全局手动播放/暂停开关 (不论列数，点击上 2/3 区域均可控制播放与暂停)
                      if (evt === 'click' || evt === 'touchend') {
-                          // 濡傛灉鏄暱鎸夛紝鍒欐斁杩囦互鏀寔绯荤粺鍘熸湁闀挎寜澶氶€夋搷浣?
+                          // 如果是长按，则放过以支持系统原有长按多选操作
                           if (Date.now() - clickStartTime > 500) return;
                           
                           e.preventDefault();
@@ -2376,7 +2376,7 @@
                           
                           const rv = card.querySelector('.jf-real-video');
                           if (rv) {
-                              // 濡傛灉姝ｅ湪灏濊瘯鎾斁鎴栧凡缁忔槸鎵嬪姩鎾斁鐘舵€?
+                              // 如果正在尝试播放或已经是手动播放状态
                               const isCurrentlyPlaying = rv.style.display === 'block' && rv.dataset.userPaused !== 'true';
 
                               if (isCurrentlyPlaying) {
@@ -2386,11 +2386,11 @@
                                   rv.style.display = 'none';
                                   
                                   const overlay = card.querySelector('.jf-sprite-overlay');
-                                  if (overlay) overlay.style.display = 'none'; // 闅愯棌 trickplay 鍙犲眰闇插嚭鍘熷鍥剧墖
+                                  if (overlay) overlay.style.display = 'none'; // 隐藏 trickplay 叠层露出原始图片
                               } else {
                                   rv.dataset.manualPlay = 'true';
                                   rv.dataset.userPaused = 'false';
-                                  // 绔嬪嵆灏濊瘯鍔犺浇鍜屾挱鏀?
+                                  // 立即尝试加载和播放
                                   const auth = typeof getAuth === 'function' ? getAuth() : null;
                                   const itemId = card.getAttribute('data-id');
                                   if (auth && itemId) {
@@ -2412,13 +2412,13 @@
                  }
             }
 
-            // 4. 褰撳師鐢诲紩鎿庡拰鑷姩杞挱閮藉叧闂椂锛屽鐞嗙偣鍑诲脊绐?
+            // 4. 当原画引擎和自动轮播都关闭时，处理点击弹窗
             if (!isRealVideoPreview && !isAutoPlayEnabled) {
                 if (evt === 'click') {
-                    // 濡傛灉鏄暱鎸?姣斿涓轰簡閫変腑鏂囨湰绛夐粯璁よ涓?锛屾斁杩?
+                    // 如果是长按(比如为了选中文本等默认行为)，放过
                     if (Date.now() - clickStartTime > 500) return;
                     
-                    // 涓嬩笁鍒嗕箣涓€涓嶅脊绐楋紝鐩存帴杞師娴佺▼杩涘叆璇︽儏
+                    // 下三分之一不弹窗，直接转原流程进入详情
                     if (mouseY > rect.height * 0.66) return;
 
                     const itemId = card.getAttribute('data-id');
@@ -2429,12 +2429,12 @@
                     const auth = getAuth();
                     if (!auth) return;
 
-                    // 纭涓哄皬绐楀姩浣滃悗锛屽悶鎺夌偣鍑讳簨浠?
+                    // 确认为小窗动作后，吞掉点击事件
                     e.preventDefault();
                     e.stopPropagation();
                     e.stopImmediatePropagation();
 
-                    const title = card.querySelector('.cardText')?.innerText || '瑙嗛棰勮';
+                    const title = card.querySelector('.cardText')?.innerText || '视频预览';
                     let startSecond = null;
                     let info = itemCache.get(itemId);
                     if (info && info.RunTimeTicks) {
@@ -2454,7 +2454,7 @@
         }, true); // Use capture phase
     });
     
-    // --- 娴锋姤鎾斁娆℃暟瑙掓爣 ---
+    // --- 海报播放次数角标 ---
     function updatePlayCountBadge(card, itemId, data) {
         const playCount = data?.UserData?.PlayCount ?? 0;
         const imgContainer = card.querySelector('.cardImageContainer') || card.querySelector('.cardBox');
@@ -2466,11 +2466,11 @@
             badge.className = 'jf-play-count-badge';
             imgContainer.appendChild(badge);
         }
-        badge.textContent = '鈻?' + playCount;
+        badge.textContent = '▶ ' + playCount;
         badge.style.cssText = '';
     }
 
-    // --- PC 绔紶鏍囨偓鍋滃師浣嶉瑙?(鏇夸唬 Global Trickplay) ---
+    // --- PC 端鼠标悬停原位预览 (替代 Global Trickplay) ---
     let activeHoverCard = null;
     const cardUICache = new WeakMap();
 
@@ -2497,7 +2497,7 @@
             realVideo.loop = true;
             realVideo.style.objectFit = 'cover';
             
-            // 鍘熺敾寮曟搸妯″紡涓嬭嚜鍔ㄥ埄鐢ㄨ棰戞湰韬椂闂村埢搴︽洿鏂拌繘搴︽潯
+            // 原画引擎模式下自动利用视频本身时间刻度更新进度条
             realVideo.addEventListener('timeupdate', () => {
                 if (!isRealVideoPreview || realVideo.style.display === 'none' || !realVideo.duration) return;
                 const percent = realVideo.currentTime / realVideo.duration;
@@ -2534,7 +2534,7 @@
         const cardTarget = e.target.closest('.card');
         const card = cardTarget || (isHoveringPopup ? activeHoverCard : null);
         
-        // 1. 澶勭悊绉诲嚭閫昏緫锛氬鏋滈紶鏍囩寮€浜嗕箣鍓嶇殑鍗＄墖锛屾垨鑰呭垏鎹㈠埌浜嗘柊鍗＄墖
+        // 1. 处理移出逻辑：如果鼠标离开了之前的卡片，或者切换到了新卡片
         if (activeHoverCard && activeHoverCard !== card) {
              const oldUI = getCardUI(activeHoverCard);
              if (oldUI) {
@@ -2546,8 +2546,8 @@
 
         if (!card) return;
 
-        // 2. 浠呯缉鐣ュ浘妯″紡锛堟í鍥撅級鍚敤浜や簰棰勮
-        // 浣跨敤涓?mobile 鐗堜竴鑷寸殑妫€娴嬮€昏緫
+        // 2. 仅缩略图模式（横图）启用交互预览
+        // 使用与 mobile 版一致的检测逻辑
         const imgContainer = card.querySelector('.cardImageContainer') || card.querySelector('.cardPadder') || card;
         const imgRect = imgContainer.getBoundingClientRect();
         if (imgRect.width / imgRect.height < 1.3) return;
@@ -2557,7 +2557,7 @@
 
         activeHoverCard = card;
 
-        // 3. 鏁版嵁棰勫姞杞?(濡傛灉鏁版嵁涓嶅瓨鍦紝鍙戣捣璇锋眰浣嗕笉绔嬪嵆鏇存柊UI)
+        // 3. 数据预加载 (如果数据不存在，发起请求但不立即更新UI)
         const itemInfo = itemCache.get(itemId);
         if (!itemInfo) {
              if (!isFetching.has(itemId)) {
@@ -2576,23 +2576,23 @@
              return;
         }
 
-        // 4. 鑾峰彇 UI
+        // 4. 获取 UI
         const ui = getCardUI(card);
         if (!ui) return;
 
-        // 鏇存柊娴锋姤瑙掓爣锛堢紦瀛樺懡涓椂涔熶繚鎸佸悓姝ワ級
+        // 更新海报角标（缓存命中时也保持同步）
         updatePlayCountBadge(card, itemId, itemInfo);
 
-        // 5. 鏄剧ず UI 缁勪欢
+        // 5. 显示 UI 组件
         ui.progressBg.style.display = 'block';
         
-        // --- 鍏ㄥ眬鎮诞杩涘害鏉℃樉绀轰笌璺熼殢閫昏緫 ---
+        // --- 全局悬浮进度条显示与跟随逻辑 ---
         const uiRect = ui.container.getBoundingClientRect();
         const localMouseY = e.clientY - uiRect.top;
         if (isRealVideoPreview && (localMouseY > uiRect.height - 30 || isHoveringPopup)) {
              globalProgressPopup.style.display = 'block';
              globalProgressPopup.style.left = (uiRect.left + window.scrollX) + 'px';
-             // 绱ц创瀹瑰櫒搴曠寰€涓?6px
+             // 紧贴容器底端往上16px
              globalProgressPopup.style.top = (uiRect.bottom - 16 + window.scrollY) + 'px';
              globalProgressPopup.style.width = uiRect.width + 'px';
              globalProgressPopup.dataset.itemId = itemId;
@@ -2619,17 +2619,17 @@
              const isManualPlay = ui.realVideo.dataset.manualPlay === 'true';
              const isUserPaused = ui.realVideo.dataset.userPaused === 'true';
 
-             // 鑻ヤ笉鍙瑕佹眰鎴栧ぇ鍒楁ā寮忎笅娌″紑鍚墜鍔ㄦ挱鏀撅紝鍧囩姝㈠叾鍦?hover 鏃剁鏉冩挱鏀?
+             // 若不可见要求或大列模式下没开启手动播放，均禁止其在 hover 时篡权播放
              if (!isVisibleEnough || (!isColsAllowed && !isManualPlay) || isUserPaused) {
                   ui.realVideo.style.display = 'none';
-                  ui.overlay.style.display = 'none'; // 淇濇寔闇插嚭鍘熷浘搴曡壊
+                  ui.overlay.style.display = 'none'; // 保持露出原图底色
                   return; 
              }
              
              ui.overlay.style.display = 'none';
              ui.realVideo.style.display = 'block';
              
-             // 濡傛灉婧愯鏇挎崲/鏈缃紝鍒欐洿鏂?src 閬垮厤閲嶅鍔犺浇
+             // 如果源被替换/未设置，则更新 src 避免重复加载
              const videoUrl = `${auth.url}/Videos/${itemId}/stream?static=true&api_key=${auth.token}`;
              if (!ui.realVideo.src || !ui.realVideo.src.includes(videoUrl)) {
                  ui.realVideo.src = videoUrl;
@@ -2641,23 +2641,23 @@
              ui.realVideo.playbackRate = globalPlaySpeed;
              ui.realVideo.play().catch(() => {});
              
-             // 婊戝姩榧犳爣鏃朵笉鍐嶆洿鏂板疄鏃惰繘搴︽潯鍜屾椂闂?(鐢辫棰戜簨浠?timeupdate 鎺ョ锛屾垨鐢辫繘搴︽潯鐨?mousedown 鐐瑰嚮澶勭悊)
+             // 滑动鼠标时不再更新实时进度条和时间 (由视频事件 timeupdate 接管，或由进度条的 mousedown 点击处理)
              
         } else {
              ui.realVideo.style.display = 'none';
              ui.overlay.style.display = 'block';
 
-             // 6. 浠呭湪 Trickplay 妯″紡涓嬭窡闅忛紶鏍囨粦鍔ㄨ绠楄繘搴?
+             // 6. 仅在 Trickplay 模式下跟随鼠标滑动计算进度
              const rect = ui.container.getBoundingClientRect();
              const percent = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
              
-             // 鏇存柊杩涘害鏉?
+             // 更新进度条
              ui.progressBar.style.width = (percent * 100) + '%';
 
-             // 7. 鏇存柊 Trickplay 鐢婚潰
+             // 7. 更新 Trickplay 画面
              const seekTime = durationSec * percent;
              
-             // 鍏抽敭鏇存柊锛氬悓姝ヨ嚜鍔ㄦ挱鏀剧姸鎬侊紝浣块紶鏍囩寮€鍚庤兘鎺ョ画鎾斁
+             // 关键更新：同步自动播放状态，使鼠标离开后能接续播放
              autoplayStates.set(itemId, seekTime);
              
              const tp = getTrickplayInfo(itemInfo);
@@ -2675,7 +2675,7 @@
                  const tileIdx = totalTiles % (tp.cols * tp.rows);
                  ui.overlay.style.backgroundSize = `${tp.cols * 100}% ${tp.rows * 100}%`;
                  
-                 // 璁＄畻 offset
+                 // 计算 offset
                  const x = tileIdx % tp.cols;
                  const y = Math.floor(tileIdx / tp.cols);
                  
@@ -2691,12 +2691,12 @@
     }, { passive: true });
 
     document.addEventListener('mouseleave', (e) => {
-        // 鍏ㄥ眬绂诲紑娓呯悊
+        // 全局离开清理
         if (activeHoverCard) {
              const oldUI = getCardUI(activeHoverCard);
              if (oldUI) {
                   oldUI.progressBg.style.display = 'none';
-                  // 灏嗚棰戞殏鍋滃苟闅愯棌锛岄伩鍏嶆嫋鎱㈡祻瑙堝櫒鍜屽悗鍙颁竴鐩存挱鏀?
+                  // 将视频暂停并隐藏，避免拖慢浏览器和后台一直播放
                   if (oldUI.realVideo) {
                       oldUI.realVideo.pause();
                       oldUI.realVideo.style.display = 'none';
@@ -2706,7 +2706,7 @@
         }
     });
 
-    // --- 缂╃暐鍥炬ā寮忚嚜鍔ㄦ挱鏀鹃€昏緫 ---
+    // --- 缩略图模式自动播放逻辑 ---
     const visibleCards = new Set();
     const autoplayStates = new Map(); // itemId -> currentSecond
 
@@ -2719,7 +2719,7 @@
                 if (entry.isIntersecting) {
                     visibleCards.add(card);
                     
-                    // 绔嬪嵆鑾峰彇璇︽儏骞跺睍绀烘挱鏀炬鏁拌鏍?
+                    // 立即获取详情并展示播放次数角标
                     const itemId = card.getAttribute('data-id');
                     const type = card.getAttribute('data-type');
                     if (itemId && (!type || !folderTypes.includes(type))) {
@@ -2742,7 +2742,7 @@
                     }
                 } else {
                     visibleCards.delete(card);
-                    // 褰诲簳閲婃斁鑴辩褰撳墠瑙嗗彛鐨勮棰戣祫婧愪互闃叉鍐呭瓨娉勬紡
+                    // 彻底释放脱离当前视口的视频资源以防止内存泄漏
                     const realVideo = card.querySelector('.jf-real-video');
                     if (realVideo) {
                         realVideo.pause();
@@ -2761,19 +2761,19 @@
             });
         }, 2000);
 
-        // 鍒濆鍖栧紑鍏虫寜閽?(鎻掑叆鍒伴《閮ㄨ彍鍗曚腑)
+        // 初始化开关按钮 (插入到顶部菜单中)
         function setupToggleBtn() {
             const headerActions = document.querySelector('.headerRight');
             if (headerActions && !document.querySelector('.jf-btn-autoplay-toggle')) {
-                // 鍘熺敾寮曟搸鎸夐挳
+                // 原画引擎按钮
                 const realVideoBtn = document.createElement('div');
                 realVideoBtn.className = 'jf-btn-autoplay-toggle';
-                realVideoBtn.style.marginLeft = 'auto'; // 淇濈暀闈犲乏瀵归綈骞舵帹寮€鍘熸湰鎸夐挳
-                realVideoBtn.innerText = '鍘熺敾寮曟搸: 鍏?;
+                realVideoBtn.style.marginLeft = 'auto'; // 保留靠左对齐并推开原本按钮
+                realVideoBtn.innerText = '原画引擎: 关';
                 realVideoBtn.onclick = () => {
                      isRealVideoPreview = !isRealVideoPreview;
                      realVideoBtn.classList.toggle('active', isRealVideoPreview);
-                     realVideoBtn.innerText = '鍘熺敾寮曟搸: ' + (isRealVideoPreview ? '寮€' : '鍏?);
+                     realVideoBtn.innerText = '原画引擎: ' + (isRealVideoPreview ? '开' : '关');
                      
                      if (!isRealVideoPreview) {
                          document.querySelectorAll('.jf-real-video').forEach(v => {
@@ -2789,13 +2789,13 @@
 
                 const btn = document.createElement('div');
                 btn.className = 'jf-btn-autoplay-toggle';
-                btn.style.marginLeft = '8px'; // 缁欒嚜鍔ㄨ疆鎾姞涓婁竴鐐瑰乏闂磋窛
-                btn.innerText = '鑷姩杞挱: 鍏?;
+                btn.style.marginLeft = '8px'; // 给自动轮播加上一点左间距
+                btn.innerText = '自动轮播: 关';
                 btn.onclick = () => {
                     isAutoPlayEnabled = !isAutoPlayEnabled;
                     btn.classList.toggle('active', isAutoPlayEnabled);
-                    btn.innerText = '鑷姩杞挱: ' + (isAutoPlayEnabled ? '寮€' : '鍏?);
-                    // 鍏抽棴鏃讹紝褰诲簳闅愯棌鎵€鏈夋鍦ㄨ嚜鍔ㄨ疆鎾殑鍙犲姞灞?
+                    btn.innerText = '自动轮播: ' + (isAutoPlayEnabled ? '开' : '关');
+                    // 关闭时，彻底隐藏所有正在自动轮播的叠加层
                     if (!isAutoPlayEnabled) {
                         document.querySelectorAll('.jf-autoplay-overlay, .jf-pc-progress-bg').forEach(el => {
                             if (el.tagName === 'VIDEO') { el.pause(); }
@@ -2807,15 +2807,15 @@
                 const speedBtn = document.createElement('div');
                 speedBtn.className = 'jf-btn-autoplay-toggle jf-btn-autoplay-speed';
                 speedBtn.style.marginLeft = '8px';
-                speedBtn.innerText = '閫熷害: ' + globalPlaySpeed + 'x';
+                speedBtn.innerText = '速度: ' + globalPlaySpeed + 'x';
                 speedBtn.onclick = () => {
                      let idx = speedOptions.indexOf(globalPlaySpeed);
                      idx = (idx + 1) % speedOptions.length;
                      globalPlaySpeed = speedOptions[idx];
-                     speedBtn.innerText = '閫熷害: ' + globalPlaySpeed + 'x';
+                     speedBtn.innerText = '速度: ' + globalPlaySpeed + 'x';
                 };
 
-                // 鍒楁暟婊戝潡
+                // 列数滑块
                 const sliderContainer = document.createElement('div');
                 sliderContainer.className = 'jf-btn-autoplay-toggle';
                 sliderContainer.style.marginLeft = '8px';
@@ -2823,15 +2823,15 @@
                 sliderContainer.style.padding = '0 8px';
                 
                 const label = document.createElement('span');
-                label.innerText = '鍒楁暟: ';
+                label.innerText = '列数: ';
                 label.style.marginRight = '6px';
                 
                 const slider = document.createElement('input');
                 slider.type = 'range';
-                slider.min = '0'; // 0 = 鑷姩
+                slider.min = '0'; // 0 = 自动
                 slider.max = '8';
                 slider.step = '1';
-                slider.style.width = '60px'; // 闃叉婊戝潡杩囬暱
+                slider.style.width = '60px'; // 防止滑块过长
                 
                 const valLabel = document.createElement('span');
                 valLabel.style.marginLeft = '6px';
@@ -2841,17 +2841,17 @@
                 function updateCols(cols) {
                     if (cols === 0) {
                         slider.value = 0;
-                        valLabel.innerText = '鑷姩';
+                        valLabel.innerText = '自动';
                         document.body.classList.remove('jf-custom-cols');
                     } else {
                         slider.value = cols;
                         valLabel.innerText = cols;
                         document.body.classList.add('jf-custom-cols');
                         
-                        // 鍔ㄦ€佽绠楀崰姣? 姣忚闂磋窛缂╁皬涓?0.4%, 鍑忓幓涓よ竟 margin
+                        // 动态计算占比: 每行间距缩小为 0.4%, 减去两边 margin
                         let margin = 0.4; 
                         let itemW = (100 - cols * margin * 2) / cols;
-                        // 绮剧‘鍒板皬鏁扮偣鍚庝袱浣嶇殑鐧惧垎姣旓紝閬垮厤娴偣鏁伴€犳垚鐨勬崲琛?
+                        // 精确到小数点后两位的百分比，避免浮点数造成的换行
                         itemW = Math.floor(itemW * 100) / 100;
                         document.documentElement.style.setProperty('--jf-thumb-width', itemW + '%');
                         document.documentElement.style.setProperty('--jf-thumb-margin', margin + '%');
@@ -2875,7 +2875,7 @@
                 randomBtn.style.marginLeft = '8px';
                 randomBtn.style.backgroundColor = '#ff9800';
                 randomBtn.style.borderColor = '#ff9800';
-                randomBtn.innerText = '闅忔満3绐?;
+                randomBtn.innerText = '随机3窗';
                 randomBtn.onclick = () => {
                     const cards = Array.from(document.querySelectorAll('.card[data-id]')).filter(c => {
                         const type = c.getAttribute('data-type');
@@ -2883,7 +2883,7 @@
                     });
 
                     if (cards.length === 0) {
-                        alert('褰撳墠椤甸潰娌℃湁鎵惧埌鍙挱鏀剧殑瑙嗛锛?);
+                        alert('当前页面没有找到可播放的视频！');
                         return;
                     }
 
@@ -2893,10 +2893,10 @@
                     randomCols = 3;
                     randomGap = 20;
 
-                    // 娓呴櫎鐜版湁鐨?
+                    // 清除现有的
                     [...previewWindows].forEach(w => destroyWindow(w));
 
-                    // 闅忔満閫変笁涓墦寮€
+                    // 随机选三个打开
                     for (let i = 0; i < 3; i++) {
                         openRandomWindow();
                     }
@@ -2907,7 +2907,7 @@
                 favoriteBtn.style.marginLeft = '8px';
                 favoriteBtn.style.backgroundColor = '#e91e63';
                 favoriteBtn.style.borderColor = '#e91e63';
-                favoriteBtn.innerText = '鏈€鐖遍殢鏈?;
+                favoriteBtn.innerText = '最爱随机';
                 favoriteBtn.onclick = async () => {
                     const cards = Array.from(document.querySelectorAll('.card[data-id]')).filter(c => {
                         const type = c.getAttribute('data-type');
@@ -2915,7 +2915,7 @@
                     });
 
                     if (cards.length === 0) {
-                        alert('褰撳墠椤甸潰娌℃湁鎵惧埌鍙挱鏀剧殑瑙嗛锛?);
+                        alert('当前页面没有找到可播放的视频！');
                         return;
                     }
 
@@ -2925,8 +2925,8 @@
                     randomCols = 3;
                     randomGap = 20;
 
-                    showToast('馃攳 姝ｅ湪鍔犺浇椤甸潰涓墍鏈夎棰戠殑鎾斁鏁版嵁...', 'info');
-                    favoriteBtn.innerText = '鍔犺浇涓?..';
+                    showToast('🔍 正在加载页面中所有视频的播放数据...', 'info');
+                    favoriteBtn.innerText = '加载中...';
                     favoriteBtn.style.pointerEvents = 'none';
 
                     try {
@@ -2934,7 +2934,7 @@
                     } catch (e) {
                         console.error('[JF] Preload failed', e);
                     } finally {
-                        favoriteBtn.innerText = '鏈€鐖遍殢鏈?;
+                        favoriteBtn.innerText = '最爱随机';
                         favoriteBtn.style.pointerEvents = 'auto';
                     }
 
@@ -2945,15 +2945,15 @@
                      }).length;
 
                     if (favCount === 0) {
-                        alert('褰撳墠椤甸潰娌℃湁鎵惧埌浠讳綍琚偍鏍囪涓衡€滄渶鐖扁€濈殑瑙嗛锛?);
+                        alert('当前页面没有找到任何被您标记为“最爱”的视频！');
                         isFavoriteRandomMode = false;
                         return;
                     }
 
-                    // 娓呴櫎鐜版湁鐨?
+                    // 清除现有的
                     [...previewWindows].forEach(w => destroyWindow(w));
 
-                    // 闅忔満閫変笁涓墦寮€
+                    // 随机选三个打开
                     for (let i = 0; i < 3; i++) {
                         openRandomWindow();
                     }
@@ -2964,7 +2964,7 @@
                 tryNewBtn.style.marginLeft = '8px';
                 tryNewBtn.style.backgroundColor = '#9c27b0';
                 tryNewBtn.style.borderColor = '#9c27b0';
-                tryNewBtn.innerText = '灏濇柊闅忔満';
+                tryNewBtn.innerText = '尝新随机';
                 tryNewBtn.onclick = async () => {
                     const cards = Array.from(document.querySelectorAll('.card[data-id]')).filter(c => {
                         const type = c.getAttribute('data-type');
@@ -2972,7 +2972,7 @@
                     });
 
                     if (cards.length === 0) {
-                        alert('褰撳墠椤甸潰娌℃湁鎵惧埌鍙挱鏀剧殑瑙嗛锛?);
+                        alert('当前页面没有找到可播放的视频！');
                         return;
                     }
 
@@ -2982,8 +2982,8 @@
                     randomCols = 3;
                     randomGap = 20;
 
-                    showToast('馃攳 姝ｅ湪鍔犺浇椤甸潰涓墍鏈夎棰戠殑鎾斁鏁版嵁...', 'info');
-                    tryNewBtn.innerText = '鍔犺浇涓?..';
+                    showToast('🔍 正在加载页面中所有视频的播放数据...', 'info');
+                    tryNewBtn.innerText = '加载中...';
                     tryNewBtn.style.pointerEvents = 'none';
 
                     try {
@@ -2991,20 +2991,20 @@
                     } catch (e) {
                         console.error('[JF] Preload failed', e);
                     } finally {
-                        tryNewBtn.innerText = '灏濇柊闅忔満';
+                        tryNewBtn.innerText = '尝新随机';
                         tryNewBtn.style.pointerEvents = 'auto';
                     }
 
-                    // 娓呴櫎鐜版湁鐨?
+                    // 清除现有的
                     [...previewWindows].forEach(w => destroyWindow(w));
 
-                    // 闅忔満閫変笁涓墦寮€
+                    // 随机选三个打开
                     for (let i = 0; i < 3; i++) {
                         openRandomWindow();
                     }
                 };
 
-                // 鍙嶅悜鎻掑叆浠ヤ繚璇侀『搴? sliderContainer鍦ㄥ彸, speedBtn, btn, realVideoBtn鍦ㄥ乏
+                // 反向插入以保证顺序: sliderContainer在右, speedBtn, btn, realVideoBtn在左
                 headerActions.prepend(sliderContainer);
                 headerActions.prepend(speedBtn);
                 headerActions.prepend(btn);
@@ -3015,7 +3015,7 @@
             }
         }        setInterval(setupToggleBtn, 1000);
 
-        // 璁板綍涓婃鏇存柊鏃堕棿鎺у埗鎾斁閫熺巼
+        // 记录上次更新时间控制播放速率
         let lastUpdateTime = Date.now();
 
         setInterval(async () => {
@@ -3027,15 +3027,15 @@
             if (!auth) return;
 
             for (const card of visibleCards) {
-                // 濡傛灉榧犳爣姝ｅ湪鎮仠锛屽繀瀹氳烦杩?
+                // 如果鼠标正在悬停，必定跳过
                 if (card.matches(':hover')) continue;
 
                 const rect = card.getBoundingClientRect();
                 const ui = getCardUI(card);
                 
-                // --- 浠ヤ笅澶勭悊闈炴偓鍋滅姸鎬佷笅锛堢敱寮€鍏冲喅瀹氭槸鍚﹁嚜鍔ㄨ疆鎾級---
-                // 1. 濡傛灉寮€鍏抽兘琚叧闂紝鎴栬€呭崱鐗囧浘鐗囧尯鍩熶笉鏄í鍥炬ā寮忥紝闅愯棌鍙犲姞灞傚苟璺宠繃璁＄畻
-                // 淇锛氬繀椤讳娇鐢?ui.container 鑰屼笉鏄?card 鏉ヨ绠楀楂樻瘮
+                // --- 以下处理非悬停状态下（由开关决定是否自动轮播）---
+                // 1. 如果开关都被关闭，或者卡片图片区域不是横图模式，隐藏叠加层并跳过计算
+                // 修复：必须使用 ui.container 而不是 card 来计算宽高比
                 const imgRect = ui ? ui.container.getBoundingClientRect() : rect;
                 if (!(isAutoPlayEnabled || isRealVideoPreview) || imgRect.width / imgRect.height < 1.1) {
                      if (ui) {
@@ -3067,21 +3067,21 @@
 
                 if (!ui) continue;
 
-                // 浼樺寲锛氬鏋滈紶鏍囨鎮仠鍦ㄥ崱鐗囦笂锛屼氦缁?mousemove 閫昏緫澶勭悊
+                // 优化：如果鼠标正悬停在卡片上，交给 mousemove 逻辑处理
                 if (card.matches(':hover')) continue;
 
-                ui.progressBg.style.display = 'block'; // 鑷姩鎾斁鏃朵篃鏄剧ず杩涘害鏉?
+                ui.progressBg.style.display = 'block'; // 自动播放时也显示进度条
 
                 const durationSec = info.RunTimeTicks / 10000000;
                 let curTime = autoplayStates.get(itemId) || 0;
                 
                 if (isRealVideoPreview) {
-                     // 1. 瑙嗚鐜囨娴嬶細椤甸潰涓婃湭鏄剧ず瓒呰繃涓夊垎涔嬩竴鐨勭缉鐣ュ浘涓嶆挱鏀捐棰?
+                     // 1. 视见率检测：页面上未显示超过三分之一的缩略图不播放视频
                      const imgRectLocal = ui ? ui.container.getBoundingClientRect() : rect;
                      const visibleHeight = Math.min(imgRectLocal.bottom, window.innerHeight) - Math.max(imgRectLocal.top, 0);
                      const isVisibleEnough = (visibleHeight >= imgRectLocal.height * 0.33);
 
-                     // 2. 鍒楁暟妫€娴嬶細澶т簬3鍒楁椂绂佺敤鑷姩鎾斁
+                     // 2. 列数检测：大于3列时禁用自动播放
                      let currentCols = globalThumbCols > 0 ? globalThumbCols : (window.innerWidth <= 1600 ? 2 : 3);
                      const isColsAllowed = currentCols <= 3;
                      const isManualPlay = ui.realVideo && ui.realVideo.dataset.manualPlay === 'true';
@@ -3094,7 +3094,7 @@
                               ui.overlay.style.display = 'none';
                               
                               if (!isVisibleEnough) {
-                                  // 濡傛灉鏄洜涓烘粴鍑哄睆骞曞鑷村仠姝㈢殑锛岄噸缃负闈炴墜鍔ㄧ姸鎬侊紝鍏嶅緱涓嬫婊氬洖鏉ュ張澶勪簬濂囨€姸鎬?
+                                  // 如果是因为滚出屏幕导致停止的，重置为非手动状态，免得下次滚回来又处于奇怪状态
                                   ui.realVideo.dataset.manualPlay = 'false';
                                   ui.realVideo.dataset.userPaused = 'false';
                               }
@@ -3108,17 +3108,17 @@
                      const videoUrl = `${auth.url}/Videos/${itemId}/stream?static=true&api_key=${auth.token}`;
                      if (!ui.realVideo.src || !ui.realVideo.src.includes(videoUrl)) {
                          ui.realVideo.src = videoUrl;
-                         // 鍒濇寤虹珛瑙嗛杩炴帴锛岀洿鎺ヨ缃繘搴﹀苟鐢辫棰戣嚜韬潵鎺у埗鍚庣画娴侀€濓紝涓嶅啀姝ヨ繘鍙犲姞 dt
+                         // 初次建立视频连接，直接设置进度并由视频自身来控制后续流逝，不再步进叠加 dt
                          ui.realVideo.currentTime = curTime;
                          if (typeof markAsPlayed === 'function') markAsPlayed(itemId, auth);
                          if (typeof reportPlayback === 'function') reportPlayback(itemId, auth, ui.realVideo.currentTime, false, 'Started');
                      } 
                      
-                     // 鎸佺画妫€鏌ユ槸涓嶆槸宸茬粡鍦ㄦ挱锛岀淮鎸侀€熷害
+                     // 持续检查是不是已经在播，维持速度
                      ui.realVideo.playbackRate = globalPlaySpeed;
                      ui.realVideo.play().catch(()=>{});
 
-                     // 璁╄繘搴︽潯瀹炴椂璺熼殢鍘熺敾瑙嗛鑷韩鐨勭粷瀵硅繘搴︼紝鑰屼笉鍐嶄汉涓虹疮鍔?curTime
+                     // 让进度条实时跟随原画视频自身的绝对进度，而不再人为累加 curTime
                      curTime = ui.realVideo.currentTime;
                      autoplayStates.set(itemId, curTime);
                      
@@ -3129,17 +3129,17 @@
                      ui.realVideo.style.display = 'none';
                      ui.overlay.style.display = 'block';
 
-                     // 鍘熸湁渚濋潬鍥剧墖姝ヨ繘鐨勫揩鐓ч€昏緫
+                     // 原有依靠图片步进的快照逻辑
                      const tp = getTrickplayInfo(info);
                      const targetId = tp.id || itemId;
                      const tpInterval = tp.interval || 10;
                      
-                     // 浣跨敤鏃堕棿宸绠楁杩涜繘搴?
+                     // 使用时间差计算步进进度 
                      let moveAmount = (dt / 1000) * globalPlaySpeed;
                      curTime = (curTime + moveAmount) % durationSec; 
                      autoplayStates.set(itemId, curTime);
      
-                     // 鏇存柊杩涘害鏉?
+                     // 更新进度条
                      const percent = curTime / durationSec;
                      ui.progressBar.style.width = (percent * 100) + '%';
      
@@ -3165,25 +3165,25 @@
         }, 100);
     }
 
-    // --- 甯冨眬妫€娴嬶細缂╃暐鍥炬ā寮忚嚜鍔ㄦ斁澶?---
+    // --- 布局检测：缩略图模式自动放大 ---
     function checkLayoutMode() {
-        // 閬嶅巻鎵€鏈夊彲鑳界殑缃戞牸瀹瑰櫒
+        // 遍历所有可能的网格容器
         const containers = document.querySelectorAll('.itemsContainer');
         
         containers.forEach(container => {
-            // 杩囨护锛氭帓闄ゆí鍚戞粴鍔ㄥ鍣紙棣栭〉銆佽鎯呴〉鎺ㄨ崘绛夛級锛屽彧澶勭悊涓诲獟浣撳簱缃戞牸
+            // 过滤：排除横向滚动容器（首页、详情页推荐等），只处理主媒体库网格
             if (container.closest('.emby-scroller') || container.classList.contains('scrollSlider')) return;
 
             const card = container.querySelector('.card');
             if (!card) return;
             
-            // 浣跨敤 cardPadder (鍥剧墖鍗犱綅瀹瑰櫒) 鏉ユ娴嬪楂樻瘮锛屾帓闄ゆ枃瀛楅珮搴﹀共鎵帮紝纭繚娴锋姤/缂╃暐鍥惧垽鏂噯纭?
+            // 使用 cardPadder (图片占位容器) 来检测宽高比，排除文字高度干扰，确保海报/缩略图判断准确
             const measureEl = card.querySelector('.cardPadder') || card.querySelector('.cardImageContainer') || card;
             const rect = measureEl.getBoundingClientRect();
             if (rect.width === 0 || rect.height === 0) return;
 
             // 16:9 = 1.77, 2:3 = 0.66, 3:4 = 0.75
-            // 璁惧畾 1.3 涓洪槇鍊硷紝涓ユ牸鍖哄垎妯浘鍜岀珫鍥?
+            // 设定 1.3 为阈值，严格区分横图和竖图
             const isLandscape = rect.width / rect.height > 1.3;
             
             if (isLandscape) {
@@ -3194,7 +3194,7 @@
         });
     }
 
-    // 鍚姩寰幆妫€娴?
+    // 启动循环检测
     setInterval(checkLayoutMode, 2000);
     
     initAutoplay();
