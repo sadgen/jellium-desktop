@@ -320,7 +320,7 @@
             border-radius: inherit;
             background-size: contain;
             filter: brightness(1.15); /* 增加亮度 */
-            background-color: #000; /* 黑色背景防止透明穿透 */
+            background-color: transparent;
         }
         
         /* 隐藏 Jellyfin 默认的悬停灰色遮罩 */
@@ -916,10 +916,9 @@
             itemCache.set(itemId, info);
         }
 
-                const resumeTicks = info?.UserData?.PlaybackPositionTicks || 0;
+                        const resumeTicks = info?.UserData?.PlaybackPositionTicks || 0;
         const isFav = info?.UserData?.IsFavorite || false;
         const playCount = info?.UserData?.PlayCount || 0;
-        const posterUrl = auth.url + "/Items/" + itemId + "/Images/Primary?api_key=" + auth.token;
 
         // --- 增加字幕提取逻辑 ---
         const mediaSource = info?.MediaSources?.[0];
@@ -948,6 +947,7 @@
         const pos = getSlotStyle(slotIndex);
         Object.assign(container.style, pos);
 
+        const videoUrl = getVideoStreamUrl(itemId, auth, mediaSourceId);
         container.innerHTML = `
             <div class="jf-preview-header">
                 <span style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:50%;"><span class="jf-title-play-count" style="color:#aaa; font-size:11px; margin-right:8px;" title="播放次数">[播放: ${playCount}]</span>${title}</span>
@@ -963,6 +963,7 @@
                     </select>
                     <div class="jf-btn-vr" style="cursor: pointer; padding: 2px 8px; background: #5533ff; border-radius: 4px; font-size: 11px; font-weight: bold; color: white; margin-right: 4px;" title="开启/关闭 VR 模式">🥽 VR</div>
                     <div class="jf-btn-next-video" style="cursor: pointer; padding: 2px 8px; background: #e67e22; border-radius: 4px; font-size: 11px; font-weight: bold; color: white; margin-right: 4px;" title="播放下一个 Part 或视频">下一部</div>
+                    <div class="jf-btn-mpv" style="cursor: pointer; padding: 2px 8px; background: #00b300; border-radius: 4px; font-size: 11px; font-weight: bold; color: white; margin-right: 4px;" title="使用 MPV Shim 播放">MPV 播放</div>
                     <div class="jf-btn-next" style="cursor: pointer; padding: 2px 8px; background: #00a4dc; border-radius: 4px; font-size: 11px; font-weight: bold; color: white; margin-right: 4px; display: ${(isRandomMode || isTryNewRandomMode || isFavoriteRandomMode) ? 'block' : 'none'};">换一个</div>
                     <div class="jf-btn-reload" title="重新加载此窗口">刷新</div>
                     <div class="jf-btn-favorite" title="加入/取消最爱" style="background: ${isFav ? '#e6b800' : '#444'};" data-isfav="${isFav}">${isFav ? '已最爱' : '最爱'}</div>
@@ -971,9 +972,8 @@
                 </div>
             </div>
             <div class="video-wrapper">
-                <img class="jf-poster-img" src="${posterUrl}" style="width:100%; height:100%; object-fit:contain; border-bottom-left-radius:10px; border-bottom-right-radius:10px;">
-                <video class="jf-video-el" autoplay playsinline muted style="display:none;">
-                    <source src="" type="video/mp4">
+                <video class="jf-video-el" autoplay playsinline muted>
+                    <source src="${videoUrl}" type="video/mp4">
                     ${tracksHtml}
                 </video>
                 <div class="jf-trickplay-thumb"></div>
@@ -982,7 +982,6 @@
         `;
 
         document.body.appendChild(container);
-        castToMpv(itemId, startSecond ? Math.floor(startSecond * 10000000) : resumeTicks);
 
         const videoEl = container.querySelector('.jf-video-el');
 
@@ -1396,12 +1395,13 @@
             itemCache.set(partItem.Id, info);
         }
 
-                const mediaSource = info?.MediaSources?.[0];
+                        const mediaSource = info?.MediaSources?.[0];
         const mediaSourceId = mediaSource?.Id;
-        const posterUrl = winObj.auth.url + "/Items/" + partItem.Id + "/Images/Primary?api_key=" + winObj.auth.token;
-        const posterImg = winObj.el.querySelector('.jf-poster-img');
-        if (posterImg) posterImg.src = posterUrl;
-        castToMpv(partItem.Id, 0);
+        const videoUrl = getVideoStreamUrl(partItem.Id, winObj.auth, mediaSourceId);
+        
+        videoEl.innerHTML = `<source src="${videoUrl}" type="video/mp4">`;
+        videoEl.load();
+        videoEl.play().catch(() => {});
 
         if (wasVRActive) {
             setTimeout(() => {
@@ -1450,10 +1450,15 @@
         winObj.currentPartIndex = 0;
         winObj.info = info;
 
-                const posterUrl = winObj.auth.url + "/Items/" + nextItemId + "/Images/Primary?api_key=" + winObj.auth.token;
-        const posterImg = winObj.el.querySelector('.jf-poster-img');
-        if (posterImg) posterImg.src = posterUrl;
-        castToMpv(nextItemId, 0);
+                        const videoEl = winObj.el.querySelector('.jf-video-el');
+        if (videoEl) {
+            const mediaSource = info?.MediaSources?.[0];
+            const mediaSourceId = mediaSource?.Id;
+            const videoUrl = getVideoStreamUrl(nextItemId, winObj.auth, mediaSourceId);
+            videoEl.innerHTML = `<source src="${videoUrl}" type="video/mp4">`;
+            videoEl.load();
+            videoEl.play().catch(() => {});
+        }
 
         updateHeaderTitleForWin(winObj, nextTitle);
         setupTrickplay(winObj, nextItemId, winObj.auth);
@@ -2465,8 +2470,8 @@
     let activeHoverCard = null;
     const cardUICache = new WeakMap();
 
-    function getVideoStreamUrl(itemId, auth, mediaSourceId = null) {
-        let url = auth.url + "/Videos/" + itemId + "/stream?VideoCodec=h264&AudioCodec=aac,mp3&api_key=" + auth.token;
+        function getVideoStreamUrl(itemId, auth, mediaSourceId = null) {
+        let url = auth.url + "/Videos/" + itemId + "/stream?container=mp4&VideoCodec=h264&AudioCodec=aac,mp3&api_key=" + auth.token;
         if (mediaSourceId) {
             url += "&MediaSourceId=" + mediaSourceId;
         }
