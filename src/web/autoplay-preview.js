@@ -951,7 +951,7 @@
         const pos = getSlotStyle(slotIndex);
         Object.assign(container.style, pos);
 
-        const videoUrl = `${auth.url}/Items/${itemId}/Download?api_key=${auth.token}`;
+        const videoUrl = getVideoStreamUrl(itemId, auth, mediaSourceId);
         container.innerHTML = `
             <div class="jf-preview-header">
                 <span style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:50%;"><span class="jf-title-play-count" style="color:#aaa; font-size:11px; margin-right:8px;" title="播放次数">[播放: ${playCount}]</span>${title}</span>
@@ -1140,8 +1140,8 @@
                     // 2. 宽松匹配：Client 或 DeviceName 含 "mpv"（大小写不敏感）
                     if (!mpvSession) {
                         mpvSession = sessions.find(s =>
-                            (s.Client && s.Client.toLowerCase().includes('mpv')) ||
-                            (s.DeviceName && s.DeviceName.toLowerCase().includes('mpv'))
+                            (s.Client && (s.Client.toLowerCase().includes('mpv') || s.Client.toLowerCase().includes('jellium'))) ||
+                            (s.DeviceName && (s.DeviceName.toLowerCase().includes('mpv') || s.DeviceName.toLowerCase().includes('jellium')))
                         );
                     }
 
@@ -1401,7 +1401,7 @@
 
         const mediaSource = info?.MediaSources?.[0];
         const mediaSourceId = mediaSource?.Id;
-        const videoUrl = `${winObj.auth.url}/Items/${partItem.Id}/Download?MediaSourceId=${mediaSourceId}&api_key=${winObj.auth.token}`;
+        const videoUrl = getVideoStreamUrl(partItem.Id, winObj.auth, mediaSourceId);
         
         videoEl.innerHTML = `<source src="${videoUrl}" type="video/mp4">`;
         videoEl.load();
@@ -1458,7 +1458,7 @@
         if (videoEl) {
             const mediaSource = info?.MediaSources?.[0];
             const mediaSourceId = mediaSource?.Id;
-            const videoUrl = `${winObj.auth.url}/Items/${nextItemId}/Download?MediaSourceId=${mediaSourceId}&api_key=${winObj.auth.token}`;
+            const videoUrl = getVideoStreamUrl(nextItemId, winObj.auth, mediaSourceId);
             videoEl.innerHTML = `<source src="${videoUrl}" type="video/mp4">`;
             videoEl.load();
             videoEl.play().catch(() => {});
@@ -2395,7 +2395,7 @@
                                   const itemId = card.getAttribute('data-id');
                                   if (auth && itemId) {
                                       rv.style.display = 'block';
-                                      const videoUrl = `${auth.url}/Videos/${itemId}/stream?static=true&api_key=${auth.token}`;
+                                      const videoUrl = getVideoStreamUrl(itemId, auth);
                                       if (!rv.src || !rv.src.includes(videoUrl)) {
                                           rv.src = videoUrl;
                                           rv.currentTime = typeof autoplayStates !== 'undefined' ? (autoplayStates.get(itemId) || 0) : 0;
@@ -2474,9 +2474,55 @@
     let activeHoverCard = null;
     const cardUICache = new WeakMap();
 
+    function getVideoStreamUrl(itemId, auth, mediaSourceId = null) {
+        let url = auth.url + "/Videos/" + itemId + "/stream?VideoCodec=h264&AudioCodec=aac,mp3&api_key=" + auth.token;
+        if (mediaSourceId) {
+            url += "&MediaSourceId=" + mediaSourceId;
+        }
+        return url;
+    }
+
+    function adjustOverlayAspect(ui) {
+        if (!ui || !ui.container) return;
+        const rect = ui.container.getBoundingClientRect();
+        const w = rect.width;
+        const h = rect.height;
+        if (w === 0 || h === 0) return;
+
+        const targetRatio = 16 / 9;
+        const currentRatio = w / h;
+
+        let targetW, targetH;
+        if (currentRatio > targetRatio) {
+            targetH = h;
+            targetW = h * targetRatio;
+        } else {
+            targetW = w;
+            targetH = w / targetRatio;
+        }
+
+        ui.overlay.style.width = targetW + 'px';
+        ui.overlay.style.height = targetH + 'px';
+        ui.overlay.style.left = ((w - targetW) / 2) + 'px';
+        ui.overlay.style.top = ((h - targetH) / 2) + 'px';
+        ui.overlay.style.position = 'absolute';
+        
+        if (ui.realVideo) {
+            ui.realVideo.style.width = targetW + 'px';
+            ui.realVideo.style.height = targetH + 'px';
+            ui.realVideo.style.left = ((w - targetW) / 2) + 'px';
+            ui.realVideo.style.top = ((h - targetH) / 2) + 'px';
+            ui.realVideo.style.position = 'absolute';
+            ui.realVideo.style.objectFit = 'contain';
+        }
+    }
+
     function getCardUI(card) {
         let cached = cardUICache.get(card);
-        if (cached) return cached;
+        if (cached) {
+            adjustOverlayAspect(cached);
+            return cached;
+        }
 
         let container = card.querySelector('.cardImageContainer') || card.querySelector('.cardBox');
         if (!container) return null;
@@ -2525,6 +2571,7 @@
         }
         
         const ui = { overlay, progressBg, progressBar: progressBg.firstChild, realVideo, container };
+        adjustOverlayAspect(ui);
         cardUICache.set(card, ui);
         return ui;
     }
@@ -2630,7 +2677,7 @@
              ui.realVideo.style.display = 'block';
              
              // 如果源被替换/未设置，则更新 src 避免重复加载
-             const videoUrl = `${auth.url}/Videos/${itemId}/stream?static=true&api_key=${auth.token}`;
+             const videoUrl = getVideoStreamUrl(itemId, auth);
              if (!ui.realVideo.src || !ui.realVideo.src.includes(videoUrl)) {
                  ui.realVideo.src = videoUrl;
                  ui.realVideo.currentTime = autoplayStates.get(itemId) || 0;
@@ -3105,7 +3152,7 @@
                      ui.overlay.style.display = 'none';
                      ui.realVideo.style.display = 'block';
                      
-                     const videoUrl = `${auth.url}/Videos/${itemId}/stream?static=true&api_key=${auth.token}`;
+                     const videoUrl = getVideoStreamUrl(itemId, auth);
                      if (!ui.realVideo.src || !ui.realVideo.src.includes(videoUrl)) {
                          ui.realVideo.src = videoUrl;
                          // 初次建立视频连接，直接设置进度并由视频自身来控制后续流逝，不再步进叠加 dt
